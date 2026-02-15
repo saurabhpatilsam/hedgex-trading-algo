@@ -1,0 +1,57 @@
+import { useState } from "react";
+import AccountManager from "./components/AccountManager";
+import GroupManager from "./components/GroupManager";
+import InstrumentManager from "./components/InstrumentManager";
+import StrategyPanel from "./components/StrategyPanel";
+import "./App.css";
+
+const TABS = [
+  { id: "accounts", label: "Accounts", icon: "👥" },
+  { id: "groups", label: "Groups", icon: "🔗" },
+  { id: "instruments", label: "Instruments", icon: "📊" },
+  { id: "strategy", label: "Strategy", icon: "⚡" },
+];
+
+function App() {
+  const [activeTab, setActiveTab] = useState("accounts");
+
+  return (
+    <div className="app">
+      {/* Sidebar */}
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <div className="brand-icon">⚖️</div>
+          <div className="brand-text">
+            <h1>HedgeX</h1>
+            <span>Trading Algorithm</span>
+          </div>
+        </div>
+        <nav className="sidebar-nav">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              className={`nav-item ${activeTab === tab.id ? "active" : ""}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <span className="nav-icon">{tab.icon}</span>
+              <span className="nav-label">{tab.label}</span>
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-footer">
+          <div className="version-tag">v2.0.0</div>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="main-content">
+        {activeTab === "accounts" && <AccountManager />}
+        {activeTab === "groups" && <GroupManager />}
+        {activeTab === "instruments" && <InstrumentManager />}
+        {activeTab === "strategy" && <StrategyPanel />}
+      </main>
+    </div>
+  );
+}
+
+export default App;
