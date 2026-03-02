@@ -11,6 +11,29 @@ from schemas import (
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
+def _shorten_error(error: str) -> str:
+    """Convert verbose broker errors into short, actionable messages."""
+    if not error:
+        return error
+    e = error.lower()
+    if "tradingview" in e and "entitled" in e:
+        return "Turn on TradingView Add-On in Apex Client Dashboard"
+    if "incorrect username or password" in e:
+        return "Invalid credentials — check login ID & password"
+    if "timeout" in e or "timed out" in e:
+        return "Connection timed out — try again later"
+    if "connection" in e and ("refused" in e or "reset" in e):
+        return "Broker server unreachable — try again later"
+    if "rate limit" in e or "too many" in e:
+        return "Too many requests — wait a moment and retry"
+    if "not found" in e:
+        return "Account not found on broker"
+    # Shorten generic long messages to first 80 chars
+    if len(error) > 80:
+        return error[:77] + "..."
+    return error
+
+
 # ── User CRUD ───────────────────────────────────────────────
 
 
@@ -90,12 +113,12 @@ def add_credential(user_id: int, payload: BrokerCredentialCreate, db: Session = 
         client = TradovateClient()
         token, error = client.login(payload.login_id, payload.password)
         if not token:
-            error_message = f"Broker login failed: {error}"
+            error_message = _shorten_error(error)
         else:
             try:
                 fetched_accounts = client.get_subaccounts()
             except Exception as e:
-                error_message = f"Failed to fetch sub-accounts: {str(e)}"
+                error_message = _shorten_error(f"Failed to fetch sub-accounts: {str(e)}")
 
     existing = (
         db.query(BrokerCredential)
@@ -217,7 +240,7 @@ def _sync_single_credential(cred: BrokerCredential, db: Session):
     client = TradovateClient()
     token, error = client.login(cred.login_id, cred.password)
     if not token:
-        cred.error_message = f"Broker login failed: {error}"
+        cred.error_message = _shorten_error(error)
         cred.last_synced_at = datetime.now(timezone.utc)
         db.commit()
         return False, cred.error_message
@@ -226,7 +249,7 @@ def _sync_single_credential(cred: BrokerCredential, db: Session):
         fetched_accounts = client.get_subaccounts()
         cred.error_message = None  # Clear error on success
     except Exception as e:
-        cred.error_message = f"Failed to fetch sub-accounts: {str(e)}"
+        cred.error_message = _shorten_error(f"Failed to fetch sub-accounts: {str(e)}")
         cred.last_synced_at = datetime.now(timezone.utc)
         db.commit()
         return False, cred.error_message
