@@ -28,6 +28,16 @@ def start_group_strategy(payload: GroupOrderCreate, db: Session = Depends(get_db
         raise HTTPException(status_code=400, detail="Instrument is not active")
 
     order = HedgingEngine.start_group_order(db, payload.model_dump())
+
+    # Auto-execute: place real orders immediately on start
+    try:
+        trades = HedgingEngine.execute_group_order(db, order.id)
+        order._auto_executed_trades = trades  # attach for logging
+    except Exception as e:
+        # Don't fail the start if execution fails, just log
+        import logging
+        logging.getLogger(__name__).error(f"Auto-execute failed for order {order.id}: {e}")
+
     return order
 
 

@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
@@ -55,6 +56,38 @@ class OrderDirection(str, enum.Enum):
 # ── ORM Models ─────────────────────────────────────────────
 
 
+class User(Base):
+    """A user/owner who has broker credentials and owns trading accounts."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, unique=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    credentials = relationship("BrokerCredential", back_populates="user", cascade="all, delete-orphan")
+
+
+class BrokerCredential(Base):
+    """Stores login credentials for a specific user + broker combination."""
+    __tablename__ = "broker_credentials"
+    __table_args__ = (
+        UniqueConstraint("user_id", "broker", name="uq_user_broker"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    broker = Column(String, nullable=False)  # Apex, TakeProfitTrader, MFF, etc.
+    login_id = Column(String, nullable=False, default="")
+    password = Column(String, nullable=False, default="")
+    is_active = Column(Boolean, default=True)
+    error_message = Column(String, nullable=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User", back_populates="credentials")
+    accounts = relationship("Account", back_populates="credential", cascade="all, delete-orphan")
+
+
 class Group(Base):
     __tablename__ = "groups"
 
@@ -72,23 +105,20 @@ class Account(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    owner = Column(String, nullable=False, default="")
-    broker = Column(String, nullable=False, default="Apex")
-    platform = Column(String, nullable=False, default="Tradovate")
+    credential_id = Column(Integer, ForeignKey("broker_credentials.id", ondelete="CASCADE"), nullable=False)
     account_number = Column(String, default="")
-    api_key = Column(String, default="")
-    api_secret = Column(String, default="")
+    tradovate_account_id = Column(Integer, nullable=True)
+    balance = Column(Float, default=0.0)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_updated_at = Column(DateTime, nullable=True)
 
+    credential = relationship("BrokerCredential", back_populates="accounts")
     memberships = relationship("GroupMembership", back_populates="account")
 
 
 class GroupMembership(Base):
-    """
-    Join table linking accounts to groups with a per-group pot assignment.
-    The same account can belong to multiple groups with different (or same) pots.
-    """
+    """Join table linking accounts to groups with a per-group pot assignment."""
     __tablename__ = "group_memberships"
     __table_args__ = (
         UniqueConstraint("group_id", "account_id", name="uq_group_account"),
@@ -97,7 +127,7 @@ class GroupMembership(Base):
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
-    pot = Column(Enum(PotType), nullable=False)  # POT-L or POT-S for THIS group
+    pot = Column(Enum(PotType), nullable=False)
 
     group = relationship("Group", back_populates="memberships")
     account = relationship("Account", back_populates="memberships")
@@ -108,7 +138,7 @@ class Instrument(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String, nullable=False, unique=True)
-    exchange = Column(String, nullable=False, default="CME")
+    name = Column(String, nullable=False, default="")
     instrument_type = Column(
         Enum(InstrumentType), default=InstrumentType.FUTURES
     )
@@ -121,23 +151,22 @@ class Instrument(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+# ── Legacy GroupOrder (kept for backward compat) ───────────
+
+
 class GroupOrder(Base):
-    """
-    Represents a strategy execution configuration for a group.
-    When a user starts a strategy, they create a GroupOrder which
-    defines the instrument, direction, quantity, PT/SL for each pot.
-    """
+    """Legacy strategy execution config — kept for existing data."""
     __tablename__ = "group_orders"
 
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(Integer, ForeignKey("groups.id"), nullable=False)
     instrument_id = Column(Integer, ForeignKey("instruments.id"), nullable=False)
-    direction = Column(Enum(OrderDirection), nullable=False)  # POT-L direction
+    direction = Column(Enum(OrderDirection), nullable=False)
     quantity = Column(Integer, nullable=False, default=1)
-    pot_l_profit_target = Column(Float, nullable=False, default=0)  # ticks
-    pot_l_stop_loss = Column(Float, nullable=False, default=0)      # ticks
-    pot_s_profit_target = Column(Float, nullable=False, default=0)  # ticks
-    pot_s_stop_loss = Column(Float, nullable=False, default=0)      # ticks
+    pot_l_profit_target = Column(Float, nullable=False, default=0)
+    pot_l_stop_loss = Column(Float, nullable=False, default=0)
+    pot_s_profit_target = Column(Float, nullable=False, default=0)
+    pot_s_stop_loss = Column(Float, nullable=False, default=0)
     status = Column(Enum(StrategyStatus), default=StrategyStatus.IDLE)
     started_at = Column(DateTime, nullable=True)
     stopped_at = Column(DateTime, nullable=True)
@@ -148,6 +177,7 @@ class GroupOrder(Base):
 
 
 class Trade(Base):
+    """Legacy trade record — kept for existing data."""
     __tablename__ = "trades"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -161,3 +191,103 @@ class Trade(Base):
     stop_loss = Column(Float, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     status = Column(Enum(TradeStatus), default=TradeStatus.OPEN)
+    broker_order_id = Column(String, nullable=True)
+    broker_status = Column(String, nullable=True)
+
+
+# ═══════════════════════════════════════════════════════════
+# NEW TABLES — Production Trading System
+# ═══════════════════════════════════════════════════════════
+
+
+class ActiveStrategy(Base):
+    """
+    A deployed strategy instance.
+    Stores strategy type + JSON parameters so any algo can be deployed
+    without schema changes.
+    """
+    __tablename__ = "active_strategies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, default="Unnamed")
+    strategy_type = Column(String, nullable=False)  # "HEDGING", "GRID", etc.
+    group_id = Column(Integer, ForeignKey("groups.id"), nullable=True)
+    instrument_id = Column(Integer, ForeignKey("instruments.id"), nullable=True)
+    parameters_json = Column(Text, default="{}")  # JSON blob for strategy config
+    status = Column(String, default="IDLE")  # IDLE, RUNNING, PAUSED, STOPPED
+    paper_mode = Column(Boolean, default=False)
+    started_at = Column(DateTime, nullable=True)
+    stopped_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    group = relationship("Group")
+    instrument = relationship("Instrument")
+
+    def get_parameters(self) -> dict:
+        import json
+        try:
+            return json.loads(self.parameters_json or "{}")
+        except Exception:
+            return {}
+
+    def set_parameters(self, params: dict):
+        import json
+        self.parameters_json = json.dumps(params)
+
+
+class OrderRecord(Base):
+    """
+    Production order tracking with state machine.
+    Every order goes through: PENDING_NEW → ACCEPTED → FILLED/CANCELLED/REJECTED
+    """
+    __tablename__ = "order_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    strategy_id = Column(Integer, ForeignKey("active_strategies.id"), nullable=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    instrument_id = Column(Integer, ForeignKey("instruments.id"), nullable=False)
+    side = Column(String, nullable=False)  # "Buy" or "Sell"
+    quantity = Column(Integer, nullable=False, default=1)
+    filled_quantity = Column(Integer, default=0)
+    order_type = Column(String, default="Market")  # Market, Limit, Stop
+    price = Column(Float, nullable=True)  # Limit/Stop price
+    fill_price = Column(Float, nullable=True)  # Actual fill price
+    state = Column(String, default="PENDING_NEW")
+    broker_order_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    closed_at = Column(DateTime, nullable=True)
+
+    account = relationship("Account")
+    instrument = relationship("Instrument")
+
+
+class AuditLog(Base):
+    """
+    Immutable audit trail for every trading decision.
+    Records: order state changes, strategy events, kill switch, errors.
+    """
+    __tablename__ = "audit_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    strategy_id = Column(Integer, ForeignKey("active_strategies.id"), nullable=True)
+    event_type = Column(String, nullable=False)  # ORDER_PLACED, KILL_SWITCH, etc.
+    details_json = Column(Text, default="{}")
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class SystemAlert(Base):
+    """
+    Alerts for fills, errors, drawdown breaches, system failures.
+    Future: integrate with SMS/email providers.
+    """
+    __tablename__ = "system_alerts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    alert_type = Column(String, nullable=False)  # FILL, ERROR, DRAWDOWN, SYSTEM
+    severity = Column(String, default="INFO")  # INFO, WARNING, CRITICAL
+    title = Column(String, nullable=False)
+    message = Column(Text, default="")
+    strategy_id = Column(Integer, nullable=True)
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

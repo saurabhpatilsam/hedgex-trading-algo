@@ -1,4 +1,4 @@
-const API_BASE = "http://localhost:8000/api";
+const API_BASE = (import.meta.env.VITE_API_URL || "http://localhost:8000") + "/api";
 
 async function request(path, options = {}) {
     const res = await fetch(`${API_BASE}${path}`, {
@@ -17,6 +17,25 @@ async function request(path, options = {}) {
     return data;
 }
 
+// ── Users ──────────────────────────────────────────────────
+export const usersApi = {
+    list: () => request("/users/"),
+    get: (id) => request(`/users/${id}`),
+    create: (data) =>
+        request("/users/", { method: "POST", body: JSON.stringify(data) }),
+    update: (id, data) =>
+        request(`/users/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+    delete: (id) => request(`/users/${id}`, { method: "DELETE" }),
+    addCredential: (userId, data) =>
+        request(`/users/${userId}/credentials`, { method: "POST", body: JSON.stringify(data) }),
+    updateCredential: (userId, credId, data) =>
+        request(`/users/${userId}/credentials/${credId}`, { method: "PUT", body: JSON.stringify(data) }),
+    deleteCredential: (userId, credId) =>
+        request(`/users/${userId}/credentials/${credId}`, { method: "DELETE" }),
+    syncAll: (userId) =>
+        request(`/users/${userId}/sync-all`, { method: "POST" }),
+};
+
 // ── Accounts ───────────────────────────────────────────────
 export const accountsApi = {
     list: () => request("/accounts/"),
@@ -26,6 +45,16 @@ export const accountsApi = {
     update: (id, data) =>
         request(`/accounts/${id}`, { method: "PUT", body: JSON.stringify(data) }),
     delete: (id) => request(`/accounts/${id}`, { method: "DELETE" }),
+    flatten: (accountIds) =>
+        request("/accounts/flatten", {
+            method: "POST",
+            body: JSON.stringify({ account_ids: accountIds }),
+        }),
+    syncSelected: (accountIds) =>
+        request("/accounts/sync", {
+            method: "POST",
+            body: JSON.stringify({ account_ids: accountIds }),
+        }),
 };
 
 // ── Groups ─────────────────────────────────────────────────
@@ -58,9 +87,10 @@ export const instrumentsApi = {
             body: JSON.stringify(data),
         }),
     delete: (id) => request(`/instruments/${id}`, { method: "DELETE" }),
+    sync: (userId) => request(`/instruments/sync?user_id=${userId}`, { method: "POST" }),
 };
 
-// ── Strategy ───────────────────────────────────────────────
+// ── Strategy (Legacy) ──────────────────────────────────────
 export const strategyApi = {
     start: (data) =>
         request("/strategy/start", { method: "POST", body: JSON.stringify(data) }),
@@ -86,3 +116,77 @@ export const strategyApi = {
         return request(url);
     },
 };
+
+// ── Trading System (New) ───────────────────────────────────
+export const tradingApi = {
+    // Strategy types
+    strategyTypes: () => request("/trading/strategy-types"),
+
+    // Strategy CRUD
+    deployStrategy: (data) =>
+        request("/trading/strategies", { method: "POST", body: JSON.stringify(data) }),
+    listStrategies: () => request("/trading/strategies"),
+    startStrategy: (id) =>
+        request(`/trading/strategies/${id}/start`, { method: "POST" }),
+    stopStrategy: (id) =>
+        request(`/trading/strategies/${id}/stop`, { method: "POST" }),
+    executeStrategy: (id) =>
+        request(`/trading/strategies/${id}/execute`, { method: "POST" }),
+
+    // Orders
+    listOrders: (strategyId = null, state = null, limit = 100) => {
+        let url = `/trading/orders?limit=${limit}`;
+        if (strategyId) url += `&strategy_id=${strategyId}`;
+        if (state) url += `&state=${state}`;
+        return request(url);
+    },
+
+    // Positions & Portfolio
+    positions: (strategyId = null) => {
+        let url = "/trading/positions";
+        if (strategyId) url += `?strategy_id=${strategyId}`;
+        return request(url);
+    },
+    portfolio: (strategyId = null) => {
+        let url = "/trading/portfolio";
+        if (strategyId) url += `?strategy_id=${strategyId}`;
+        return request(url);
+    },
+
+    // Kill Switch
+    killSwitch: (reason = "Manual") =>
+        request("/trading/kill-switch", {
+            method: "POST",
+            body: JSON.stringify({ reason }),
+        }),
+    deactivateKillSwitch: () =>
+        request("/trading/kill-switch/deactivate", { method: "POST" }),
+
+    // Alerts
+    alerts: (limit = 50, unreadOnly = false, severity = null) => {
+        let url = `/trading/alerts?limit=${limit}`;
+        if (unreadOnly) url += `&unread_only=true`;
+        if (severity) url += `&severity=${severity}`;
+        return request(url);
+    },
+    markAlertRead: (id) =>
+        request(`/trading/alerts/${id}/read`, { method: "POST" }),
+    markAllAlertsRead: () =>
+        request("/trading/alerts/read-all", { method: "POST" }),
+
+    // Audit Log
+    auditLog: (strategyId = null, eventType = null, limit = 100) => {
+        let url = `/trading/audit-log?limit=${limit}`;
+        if (strategyId) url += `&strategy_id=${strategyId}`;
+        if (eventType) url += `&event_type=${eventType}`;
+        return request(url);
+    },
+
+    // Reconciliation
+    reconcile: (accountId) =>
+        request(`/trading/reconcile/${accountId}`),
+
+    // Runner
+    runnerStatus: () => request("/trading/runner/status"),
+};
+

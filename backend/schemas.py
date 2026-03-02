@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel
 
@@ -9,18 +9,13 @@ from pydantic import BaseModel
 
 class AccountCreate(BaseModel):
     name: str
-    owner: str = ""
-    broker: str = "Apex"
-    platform: str = "Tradovate"
+    credential_id: int
     account_number: str = ""
     is_active: bool = True
 
 
 class AccountUpdate(BaseModel):
     name: Optional[str] = None
-    owner: Optional[str] = None
-    broker: Optional[str] = None
-    platform: Optional[str] = None
     account_number: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -28,12 +23,68 @@ class AccountUpdate(BaseModel):
 class AccountResponse(BaseModel):
     id: int
     name: str
-    owner: str
-    broker: str
-    platform: str
+    credential_id: int
     account_number: str
+    balance: float = 0.0
     is_active: bool
     created_at: datetime
+    last_updated_at: Optional[datetime] = None
+    owner: Optional[str] = None
+    user_id: Optional[int] = None
+
+    model_config = {"from_attributes": True}
+
+
+# ── User Schemas ────────────────────────────────────────────
+
+
+class BrokerCredentialCreate(BaseModel):
+    broker: str  # "Apex", "TakeProfitTrader", "MFF", etc.
+    login_id: str = ""
+    password: str = ""
+    is_active: bool = True
+
+
+class BrokerCredentialUpdate(BaseModel):
+    login_id: Optional[str] = None
+    password: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class BrokerCredentialResponse(BaseModel):
+    id: int
+    broker: str
+    login_id: str
+    password: str  # masked in real production, shown for now
+    is_active: bool
+    error_message: Optional[str] = None
+    last_synced_at: Optional[datetime] = None
+    accounts: List[AccountResponse] = []
+
+    model_config = {"from_attributes": True}
+
+
+class UserCreate(BaseModel):
+    name: str
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+
+
+class UserResponse(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+    credentials: List[BrokerCredentialResponse] = []
+
+    model_config = {"from_attributes": True}
+
+
+class UserSummary(BaseModel):
+    """Lightweight user response without credentials."""
+    id: int
+    name: str
 
     model_config = {"from_attributes": True}
 
@@ -43,40 +94,18 @@ class AccountResponse(BaseModel):
 
 class InstrumentCreate(BaseModel):
     symbol: str
-    exchange: str = "CME"
-    instrument_type: str = "FUTURES"
-    contract_month: str = ""
-    lot_size: int = 1
-    tick_size: float = 0.25
-    tick_value: float = 12.50
-    margin: float = 0.0
-    is_active: bool = True
+    name: str = ""
 
 
 class InstrumentUpdate(BaseModel):
     symbol: Optional[str] = None
-    exchange: Optional[str] = None
-    instrument_type: Optional[str] = None
-    contract_month: Optional[str] = None
-    lot_size: Optional[int] = None
-    tick_size: Optional[float] = None
-    tick_value: Optional[float] = None
-    margin: Optional[float] = None
-    is_active: Optional[bool] = None
+    name: Optional[str] = None
 
 
 class InstrumentResponse(BaseModel):
     id: int
     symbol: str
-    exchange: str
-    instrument_type: str
-    contract_month: str
-    lot_size: int
-    tick_size: float
-    tick_value: float
-    margin: float
-    is_active: bool
-    created_at: datetime
+    name: str
 
     model_config = {"from_attributes": True}
 
@@ -124,7 +153,7 @@ class GroupResponse(BaseModel):
     name: str
     is_active: bool
     created_at: datetime
-    members: list[GroupMembershipResponse] = []
+    members: List[GroupMembershipResponse] = []
 
     model_config = {"from_attributes": True}
 
@@ -185,5 +214,7 @@ class TradeResponse(BaseModel):
     stop_loss: Optional[float] = None
     timestamp: datetime
     status: str
+    broker_order_id: Optional[str] = None
+    broker_status: Optional[str] = None
 
     model_config = {"from_attributes": True}

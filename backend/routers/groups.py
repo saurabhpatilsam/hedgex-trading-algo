@@ -102,9 +102,38 @@ def add_member(
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    account = db.query(Account).filter(Account.id == payload.account_id).first()
+    account = (
+        db.query(Account)
+        .options(joinedload(Account.credential))
+        .filter(Account.id == payload.account_id)
+        .first()
+    )
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+
+    # ── Same-user validation ──────────────────────────────────
+    # Get the user who owns this account
+    new_user_id = account.credential.user_id if account.credential else None
+
+    if new_user_id:
+        # Get all accounts in the same pot of this group
+        existing_memberships = (
+            db.query(GroupMembership)
+            .options(joinedload(GroupMembership.account).joinedload(Account.credential))
+            .filter(
+                GroupMembership.group_id == group_id,
+                GroupMembership.pot == PotType(payload.pot),
+                GroupMembership.account_id != payload.account_id,  # exclude self (for updates)
+            )
+            .all()
+        )
+        for m in existing_memberships:
+            if m.account and m.account.credential and m.account.credential.user_id == new_user_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot add multiple accounts from the same user to the same pot. "
+                           f"User already has account '{m.account.name}' in {payload.pot}.",
+                )
 
     # Check if already a member of this group
     existing = (

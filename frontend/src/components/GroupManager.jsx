@@ -74,7 +74,28 @@ export default function GroupManager() {
         const accountId = parseInt(e.dataTransfer.getData("text/plain"));
         if (!accountId) return;
 
+        const droppedAccount = getAccount(accountId);
+        if (!droppedAccount) return;
+
         const state = getGroupState(groups.find((g) => g.id === groupId));
+        const targetPot = pot === "POT-L" ? state.potL : state.potS;
+
+        // Same-user validation: check if an account from the same user is already in this pot
+        const droppedUserId = droppedAccount.user_id;
+        if (droppedUserId) {
+            const existingFromSameUser = targetPot.find((id) => {
+                if (id === accountId) return false; // skip self
+                const acct = getAccount(id);
+                return acct && acct.user_id === droppedUserId;
+            });
+            if (existingFromSameUser) {
+                const existingName = getAccountName(existingFromSameUser);
+                setError(`Cannot add to ${pot}: user already has account "${existingName}" in this pot. Each pot must have accounts from different users.`);
+                return;
+            }
+        }
+
+        setError("");
         const newState = {
             potL: state.potL.filter((id) => id !== accountId),
             potS: state.potS.filter((id) => id !== accountId),
@@ -260,6 +281,7 @@ export default function GroupManager() {
                     const isExpanded = expandedGroup === group.id;
                     const changed = hasChanges(group);
                     const isSaving = saving === group.id;
+                    const potMismatch = state.potL.length !== state.potS.length && (state.potL.length > 0 || state.potS.length > 0);
 
                     return (
                         <div
@@ -358,6 +380,20 @@ export default function GroupManager() {
                                         </div>
                                     </div>
 
+                                    {/* Pot mismatch warning */}
+                                    {potMismatch && (
+                                        <div style={{
+                                            display: "flex", alignItems: "center", gap: "8px",
+                                            padding: "8px 14px", marginTop: "8px",
+                                            background: "rgba(250, 204, 21, 0.08)",
+                                            border: "1px solid rgba(250, 204, 21, 0.25)",
+                                            borderRadius: "6px", fontSize: "12px",
+                                            color: "#facc15"
+                                        }}>
+                                            ⚠️ POT-L and POT-S must have equal accounts. Currently: {state.potL.length} in POT-L, {state.potS.length} in POT-S.
+                                        </div>
+                                    )}
+
                                     {/* Save / Discard bar */}
                                     <div className="group-save-bar">
                                         {changed ? (
@@ -365,7 +401,8 @@ export default function GroupManager() {
                                                 <button
                                                     className="btn btn-primary btn-sm"
                                                     onClick={() => handleSave(group.id)}
-                                                    disabled={isSaving}
+                                                    disabled={isSaving || potMismatch}
+                                                    title={potMismatch ? "Balance POT-L and POT-S before saving" : ""}
                                                 >
                                                     {isSaving ? "Saving…" : "💾 Save Group"}
                                                 </button>

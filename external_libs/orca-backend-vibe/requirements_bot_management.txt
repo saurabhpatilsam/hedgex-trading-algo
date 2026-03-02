@@ -1,0 +1,13 @@
+# Bot Management System Dependencies
+# Add these to your main requirements.txt
+
+# Redis async client
+aioredis==2.0.1
+redis==5.0.1
+
+# PostgreSQL async support
+asyncpg==0.29.0
+sqlalchemy[asyncio]==2.0.23
+
+# Database migrations (optional but recommended)
+alembic==1.13.0

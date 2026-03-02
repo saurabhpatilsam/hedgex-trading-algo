@@ -1,19 +1,19 @@
 import { useState } from "react";
 import AccountManager from "./components/AccountManager";
 import GroupManager from "./components/GroupManager";
-import InstrumentManager from "./components/InstrumentManager";
 import StrategyPanel from "./components/StrategyPanel";
+import TradingDashboard from "./components/TradingDashboard";
 import "./App.css";
 
 const TABS = [
+  { id: "trading", label: "Trading", icon: "🎯" },
   { id: "accounts", label: "Accounts", icon: "👥" },
   { id: "groups", label: "Groups", icon: "🔗" },
-  { id: "instruments", label: "Instruments", icon: "📊" },
-  { id: "strategy", label: "Strategy", icon: "⚡" },
+  { id: "strategy", label: "Strategy Control", icon: "⚡" },
 ];
 
 function App() {
-  const [activeTab, setActiveTab] = useState("accounts");
+  const [activeTab, setActiveTab] = useState("trading");
 
   return (
     <div className="app">
@@ -23,7 +23,7 @@ function App() {
           <div className="brand-icon">⚖️</div>
           <div className="brand-text">
             <h1>HedgeX</h1>
-            <span>Trading Algorithm</span>
+            <span>Trading System</span>
           </div>
         </div>
         <nav className="sidebar-nav">
@@ -39,15 +39,15 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="version-tag">v2.0.0</div>
+          <div className="version-tag">v3.0.0</div>
         </div>
       </aside>
 
       {/* Main Content */}
       <main className="main-content">
+        {activeTab === "trading" && <TradingDashboard />}
         {activeTab === "accounts" && <AccountManager />}
         {activeTab === "groups" && <GroupManager />}
-        {activeTab === "instruments" && <InstrumentManager />}
         {activeTab === "strategy" && <StrategyPanel />}
       </main>
     </div>

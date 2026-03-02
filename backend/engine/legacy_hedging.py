@@ -1,3 +1,4 @@
+import logging
 import random
 from datetime import datetime, timezone
 
@@ -5,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from models import (
     Account,
+    BrokerCredential,
     Group,
     GroupMembership,
     GroupOrder,
@@ -16,6 +18,9 @@ from models import (
     TradeSide,
     TradeStatus,
 )
+from required_api.tradovate_client import TradovateClient
+
+logger = logging.getLogger(__name__)
 
 
 class HedgingEngine:
@@ -25,11 +30,9 @@ class HedgingEngine:
     On execution:
       1. Fetches the GroupOrder config (instrument, direction, qty, PT/SL)
       2. Fetches POT-L and POT-S accounts via GroupMembership for this group
-      3. Places opposite trades for each pot
-      4. Sets PT/SL on each trade where:
-         - By default POT-L profit_target = POT-S stop_loss
-         - By default POT-L stop_loss = POT-S profit_target
-         - But all four values can be customized
+      3. Logs into Tradovate for each account's credential
+      4. Places opposite market orders for each pot via Tradovate API
+      5. Records Trade entries with broker order IDs
     """
 
     @staticmethod
@@ -115,13 +118,34 @@ class HedgingEngine:
         return order
 
     @staticmethod
+    def _login_for_account(db: Session, account: Account) -> tuple:
+        """
+        Login to Tradovate for a specific account's credential.
+        Returns (client, error_message).
+        """
+        cred = (
+            db.query(BrokerCredential)
+            .filter(BrokerCredential.id == account.credential_id)
+            .first()
+        )
+        if not cred:
+            return None, f"No credential found for account {account.name}"
+
+        client = TradovateClient()
+        token, error = client.login(cred.login_id, cred.password)
+        if not token:
+            return None, f"Login failed for {account.name}: {error}"
+
+        return client, None
+
+    @staticmethod
     def execute_group_order(db: Session, order_id: int) -> list[dict]:
         """
         Execute one hedge cycle for a GroupOrder:
         - POT-L accounts get the configured direction
         - POT-S accounts get the opposite direction
         - Each trade gets its pot-specific PT/SL
-        - Accounts are resolved via GroupMembership (not via Account.pot)
+        - Orders are placed via real Tradovate API calls
         """
         order = db.query(GroupOrder).filter(GroupOrder.id == order_id).first()
         if not order:
@@ -133,10 +157,16 @@ class HedgingEngine:
         if not group or not instrument:
             raise ValueError("Group or Instrument not found")
 
-        # Get accounts from GroupMembership, NOT from Account.pot
+        # The contract symbol to trade (e.g., "MNQH6")
+        contract_symbol = instrument.contract_month if instrument.contract_month else instrument.symbol
+
+        # Get accounts from GroupMembership
         memberships = (
             db.query(GroupMembership)
-            .options(joinedload(GroupMembership.account))
+            .options(
+                joinedload(GroupMembership.account)
+                .joinedload(Account.credential)
+            )
             .join(Account)
             .filter(
                 GroupMembership.group_id == order.group_id,
@@ -158,57 +188,106 @@ class HedgingEngine:
 
         trades_created = []
         now = datetime.now(timezone.utc)
-        sim_price = round(random.uniform(100, 5000), 2)
+
+        # Cache clients per credential to avoid re-login
+        client_cache = {}
+
+        def get_client_for_account(account):
+            cred_id = account.credential_id
+            if cred_id in client_cache:
+                return client_cache[cred_id], None
+            client, err = HedgingEngine._login_for_account(db, account)
+            if client:
+                client_cache[cred_id] = client
+            return client, err
+
+        def place_and_record(account, side, profit_target, stop_loss):
+            """Place order on Tradovate and record the trade."""
+            action = "Buy" if side == TradeSide.LONG else "Sell"
+            broker_order_id = None
+            broker_status = None
+            entry_price = 0.0
+            error_msg = None
+
+            client, login_error = get_client_for_account(account)
+
+            if login_error:
+                error_msg = login_error
+                broker_status = f"LOGIN_FAILED: {login_error}"
+                logger.error(f"Cannot place order for {account.name}: {login_error}")
+            elif not account.tradovate_account_id:
+                error_msg = f"Missing tradovate_account_id for {account.name}"
+                broker_status = "MISSING_ACCOUNT_ID"
+                logger.error(error_msg)
+            else:
+                try:
+                    result = client.place_order(
+                        account_id=account.tradovate_account_id,
+                        account_spec=account.name,
+                        symbol=contract_symbol,
+                        action=action,
+                        qty=order.quantity,
+                    )
+                    # Extract order details from response
+                    order_info = result.get("orderId") or result.get("id")
+                    broker_order_id = str(order_info) if order_info else str(result)
+                    broker_status = result.get("ordStatus", "Submitted")
+                    entry_price = float(result.get("avgPx", 0) or result.get("price", 0) or 0)
+                    logger.info(
+                        f"Order placed: {action} {order.quantity}x {contract_symbol} "
+                        f"on {account.name} → orderID={broker_order_id}"
+                    )
+                except Exception as e:
+                    error_msg = str(e)
+                    broker_status = f"ERROR: {error_msg}"
+                    logger.error(f"Order placement failed for {account.name}: {e}")
+
+            # Record the trade regardless (with error info if failed)
+            trade = Trade(
+                account_id=account.id,
+                instrument_id=instrument.id,
+                group_order_id=order.id,
+                side=side,
+                quantity=order.quantity,
+                entry_price=entry_price,
+                profit_target=profit_target,
+                stop_loss=stop_loss,
+                timestamp=now,
+                status=TradeStatus.OPEN if not error_msg else TradeStatus.CANCELLED,
+                broker_order_id=broker_order_id,
+                broker_status=broker_status,
+            )
+            db.add(trade)
+
+            return {
+                "account": account.name,
+                "instrument": contract_symbol,
+                "side": side.value,
+                "quantity": order.quantity,
+                "price": entry_price,
+                "profit_target": profit_target,
+                "stop_loss": stop_loss,
+                "broker_order_id": broker_order_id,
+                "broker_status": broker_status,
+                "error": error_msg,
+            }
 
         # Place trades for POT-L accounts
         for account in pot_l_accounts:
-            trade = Trade(
-                account_id=account.id,
-                instrument_id=instrument.id,
-                group_order_id=order.id,
-                side=pot_l_side,
-                quantity=order.quantity,
-                entry_price=sim_price,
-                profit_target=order.pot_l_profit_target,
-                stop_loss=order.pot_l_stop_loss,
-                timestamp=now,
-                status=TradeStatus.OPEN,
+            result = place_and_record(
+                account, pot_l_side,
+                order.pot_l_profit_target, order.pot_l_stop_loss
             )
-            db.add(trade)
-            trades_created.append({
-                "account": account.name,
-                "instrument": instrument.symbol,
-                "side": pot_l_side.value,
-                "quantity": order.quantity,
-                "price": sim_price,
-                "profit_target": order.pot_l_profit_target,
-                "stop_loss": order.pot_l_stop_loss,
-            })
+            trades_created.append(result)
 
         # Place trades for POT-S accounts (opposite side)
         for account in pot_s_accounts:
-            trade = Trade(
-                account_id=account.id,
-                instrument_id=instrument.id,
-                group_order_id=order.id,
-                side=pot_s_side,
-                quantity=order.quantity,
-                entry_price=sim_price,
-                profit_target=order.pot_s_profit_target,
-                stop_loss=order.pot_s_stop_loss,
-                timestamp=now,
-                status=TradeStatus.OPEN,
+            result = place_and_record(
+                account, pot_s_side,
+                order.pot_s_profit_target, order.pot_s_stop_loss
             )
-            db.add(trade)
-            trades_created.append({
-                "account": account.name,
-                "instrument": instrument.symbol,
-                "side": pot_s_side.value,
-                "quantity": order.quantity,
-                "price": sim_price,
-                "profit_target": order.pot_s_profit_target,
-                "stop_loss": order.pot_s_stop_loss,
-            })
+            trades_created.append(result)
 
         db.commit()
         return trades_created
+
