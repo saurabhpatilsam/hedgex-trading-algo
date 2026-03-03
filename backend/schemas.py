@@ -70,11 +70,15 @@ class UserCreate(BaseModel):
 
 class UserUpdate(BaseModel):
     name: Optional[str] = None
+    static_ip: Optional[str] = None
+    proxy_region: Optional[str] = None
 
 
 class UserResponse(BaseModel):
     id: int
     name: str
+    static_ip: Optional[str] = None
+    proxy_region: Optional[str] = None
     created_at: datetime
     credentials: List[BrokerCredentialResponse] = []
 

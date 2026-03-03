@@ -408,6 +408,15 @@ export default function AccountManager() {
                             <div className="user-header-left">
                                 <span className="owner-avatar">{user.name.charAt(0).toUpperCase()}</span>
                                 <span className="user-header-name">{user.name}</span>
+                                {user.static_ip ? (
+                                    <span className="ip-badge ip-assigned" title={`Dedicated IP: ${user.static_ip}${user.proxy_region ? ` (${user.proxy_region})` : ''}`}>
+                                        🌐 {user.static_ip}
+                                    </span>
+                                ) : (
+                                    <span className="ip-badge ip-none" title="No dedicated IP assigned">
+                                        🌐 No IP
+                                    </span>
+                                )}
                                 <span className="user-header-stats">
                                     {userCreds.length} brokers
                                     {userSelectedCount > 0 && (

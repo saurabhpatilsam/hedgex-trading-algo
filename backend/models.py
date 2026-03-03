@@ -62,6 +62,8 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False, unique=True)
+    static_ip = Column(String, nullable=True)       # Dedicated outbound IP for this user
+    proxy_region = Column(String, nullable=True)     # Azure region (e.g. 'eastus')
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     credentials = relationship("BrokerCredential", back_populates="user", cascade="all, delete-orphan")
