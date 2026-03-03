@@ -86,20 +86,6 @@ export default function NetworkLogs() {
                     </tbody>
                 </table>
             </div>
-            <style jsx="true">{`
-        .code-snippet-box {
-          background: var(--bg-surface-hover);
-          padding: 6px;
-          border-radius: 4px;
-          font-family: monospace;
-          font-size: 0.85rem;
-          white-space: pre-wrap;
-          word-break: break-all;
-          max-height: 80px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-      `}</style>
         </div>
     );
 }

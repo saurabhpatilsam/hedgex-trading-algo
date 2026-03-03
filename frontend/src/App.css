@@ -3782,3 +3782,16 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
+
+.code-snippet-box {
+  background: var(--bg-surface-hover);
+  padding: 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
