@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import api from '../api'; // Assuming there is an api.js or similar
+import { usersApi } from '../api';
 
 export default function NetworkLogs() {
     const [logs, setLogs] = useState([]);
@@ -8,9 +8,7 @@ export default function NetworkLogs() {
 
     const fetchLogs = async () => {
         try {
-            const response = await fetch('/api/users/logs/all');
-            if (!response.ok) throw new Error("Failed to fetch logs");
-            const data = await response.json();
+            const data = await usersApi.getLogs();
             setLogs(data);
         } catch (err) {
             setError(err.message);

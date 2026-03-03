@@ -34,6 +34,7 @@ export const usersApi = {
         request(`/users/${userId}/credentials/${credId}`, { method: "DELETE" }),
     syncAll: (userId) =>
         request(`/users/${userId}/sync-all`, { method: "POST" }),
+    getLogs: (limit = 100) => request(`/users/logs/all?limit=${limit}`),
 };
 
 // ── Accounts ───────────────────────────────────────────────
