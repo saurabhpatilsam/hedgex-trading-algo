@@ -2284,6 +2284,24 @@ body {
   font-style: italic;
 }
 
+/* ── Region Selector ─────────────────────────────────────── */
+.region-select {
+  padding: 5px 10px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--bg-5);
+  background: var(--bg-3);
+  color: var(--gray-200);
+  font-size: 12px;
+  font-family: 'Inter', sans-serif;
+  cursor: pointer;
+  min-width: 100px;
+}
+
+.region-select:focus {
+  outline: none;
+  border-color: var(--gray-500);
+}
+
 .user-header-right {
   display: flex;
   align-items: center;

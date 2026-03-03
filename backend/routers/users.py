@@ -65,10 +65,26 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.name == payload.name).first()
     if existing:
         raise HTTPException(status_code=400, detail=f"User '{payload.name}' already exists")
-    user = User(name=payload.name)
+
+    user = User(name=payload.name, proxy_region=payload.ip_region)
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    # Auto-create Azure static IP if region specified
+    if payload.ip_region:
+        try:
+            from services.azure_ip_manager import create_static_ip
+            result = create_static_ip(payload.name, payload.ip_region)
+            user.static_ip = result["ip_address"]
+            user.proxy_region = payload.ip_region
+            db.commit()
+            db.refresh(user)
+        except Exception as e:
+            import logging
+            logging.getLogger("users").error(f"Azure IP creation failed: {e}")
+            # User is created but IP assignment failed — can be retried
+
     return user
 
 
@@ -90,6 +106,16 @@ def delete_user(user_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Clean up Azure IP if assigned
+    if user.static_ip:
+        try:
+            from services.azure_ip_manager import delete_static_ip
+            delete_static_ip(user.name)
+        except Exception as e:
+            import logging
+            logging.getLogger("users").error(f"Azure IP cleanup failed: {e}")
+
     db.delete(user)
     db.commit()
     return None

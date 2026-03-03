@@ -66,6 +66,7 @@ class BrokerCredentialResponse(BaseModel):
 
 class UserCreate(BaseModel):
     name: str
+    ip_region: Optional[str] = None  # 'india' or 'uk' — triggers Azure IP creation
 
 
 class UserUpdate(BaseModel):

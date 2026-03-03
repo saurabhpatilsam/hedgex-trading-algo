@@ -11,6 +11,7 @@ export default function AccountManager() {
     // User creation
     const [showAddUser, setShowAddUser] = useState(false);
     const [newUserName, setNewUserName] = useState("");
+    const [newUserRegion, setNewUserRegion] = useState("india");
 
     // Broker Account Modal (Credential)
     const [showCredModal, setShowCredModal] = useState(false);
@@ -150,10 +151,11 @@ export default function AccountManager() {
         if (!newUserName.trim()) return;
         clearAlerts();
         try {
-            await usersApi.create({ name: newUserName.trim() });
+            await usersApi.create({ name: newUserName.trim(), ip_region: newUserRegion });
             setNewUserName("");
+            setNewUserRegion("india");
             setShowAddUser(false);
-            setSuccess(`User "${newUserName.trim()}" created`);
+            setSuccess(`User "${newUserName.trim()}" created with ${newUserRegion.toUpperCase()} IP`);
             load();
         } catch (err) { setError(err.message); }
     };
@@ -375,12 +377,22 @@ export default function AccountManager() {
 
             {/* Add User Inline */}
             {showAddUser && (
-                <form onSubmit={handleAddUser} className="inst-add-form" style={{ marginBottom: 16 }}>
+                <form onSubmit={handleAddUser} className="inst-add-form" style={{ marginBottom: 16, gap: 8 }}>
                     <input
                         type="text" value={newUserName}
                         onChange={(e) => setNewUserName(e.target.value)}
                         placeholder="User name (e.g. Saurabh)" required autoFocus
+                        style={{ flex: 1 }}
                     />
+                    <select
+                        value={newUserRegion}
+                        onChange={(e) => setNewUserRegion(e.target.value)}
+                        className="region-select"
+                        title="IP Region"
+                    >
+                        <option value="india">🇮🇳 India</option>
+                        <option value="uk">🇬🇧 UK</option>
+                    </select>
                     <button type="submit" className="btn btn-sm btn-primary">Create</button>
                     <button type="button" className="btn btn-sm btn-cancel" onClick={() => setShowAddUser(false)}>Cancel</button>
                 </form>
@@ -409,8 +421,8 @@ export default function AccountManager() {
                                 <span className="owner-avatar">{user.name.charAt(0).toUpperCase()}</span>
                                 <span className="user-header-name">{user.name}</span>
                                 {user.static_ip ? (
-                                    <span className="ip-badge ip-assigned" title={`Dedicated IP: ${user.static_ip}${user.proxy_region ? ` (${user.proxy_region})` : ''}`}>
-                                        🌐 {user.static_ip}
+                                    <span className="ip-badge ip-assigned" title={`Dedicated IP: ${user.static_ip} (${user.proxy_region || 'unknown'})`}>
+                                        {user.proxy_region === 'india' ? '🇮🇳' : user.proxy_region === 'uk' ? '🇬🇧' : '🌐'} {user.static_ip}
                                     </span>
                                 ) : (
                                     <span className="ip-badge ip-none" title="No dedicated IP assigned">
