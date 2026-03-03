@@ -18,7 +18,7 @@ from models import (
     TradeSide,
     TradeStatus,
 )
-from required_api.tradovate_client import TradovateClient
+from required_api.tradovate_client import get_proxied_client
 
 logger = logging.getLogger(__name__)
 
@@ -121,8 +121,11 @@ class HedgingEngine:
     def _login_for_account(db: Session, account: Account) -> tuple:
         """
         Login to Tradovate for a specific account's credential.
+        Routes through the user's dedicated proxy IP.
         Returns (client, error_message).
         """
+        from models import User
+
         cred = (
             db.query(BrokerCredential)
             .filter(BrokerCredential.id == account.credential_id)
@@ -131,7 +134,9 @@ class HedgingEngine:
         if not cred:
             return None, f"No credential found for account {account.name}"
 
-        client = TradovateClient()
+        # Route through user's dedicated IP
+        user = db.query(User).filter(User.id == cred.user_id).first()
+        client = get_proxied_client(user=user)
         token, error = client.login(cred.login_id, cred.password)
         if not token:
             return None, f"Login failed for {account.name}: {error}"

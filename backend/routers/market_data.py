@@ -262,8 +262,8 @@ def collect_tradovate_chart(
     Requires valid Tradovate credentials in the system.
     This bypasses tick data and fetches pre-built OHLCV bars.
     """
-    from required_api.tradovate_client import TradovateClient
-    from models import BrokerCredential
+    from required_api.tradovate_client import get_proxied_client
+    from models import BrokerCredential, User
 
     # Get credentials
     cred = (
@@ -280,8 +280,9 @@ def collect_tradovate_chart(
             detail="No valid Tradovate/Apex credentials found for this user"
         )
 
-    # Login to get token
-    client = TradovateClient()
+    # Login to get token using user's proxy
+    user = db.query(User).filter(User.id == payload.user_id).first()
+    client = get_proxied_client(user=user)
     token, error = client.login(cred.login_id, cred.password)
     if not token:
         raise HTTPException(status_code=400, detail=f"Login failed: {error}")

@@ -357,8 +357,8 @@ def activate_kill_switch(payload: KillSwitchRequest, db: Session = Depends(get_d
     """
     from engine.risk_manager import RiskManager
     from engine.alerting import create_alert
-    from models import BrokerCredential
-    from required_api.tradovate_client import TradovateClient
+    from models import BrokerCredential, User
+    from required_api.tradovate_client import get_proxied_client
     from sqlalchemy.orm import joinedload
 
     risk = RiskManager(db)
@@ -381,7 +381,9 @@ def activate_kill_switch(payload: KillSwitchRequest, db: Session = Depends(get_d
             continue
 
         try:
-            client = TradovateClient()
+            # Get the user for proxy routing
+            user = db.query(User).filter(User.id == cred.user_id).first()
+            client = get_proxied_client(user=user)
             token, error = client.login(cred.login_id, cred.password)
             if not token:
                 flatten_reports.append({

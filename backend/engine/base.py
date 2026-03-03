@@ -123,8 +123,8 @@ class BaseStrategy(ABC):
         Place an order through the Tradovate API.
         If paper_mode is True, simulate the order instead.
         """
-        from required_api.tradovate_client import TradovateClient
-        from models import BrokerCredential
+        from required_api.tradovate_client import get_proxied_client
+        from models import BrokerCredential, User
 
         if self.paper_mode:
             import random
@@ -150,7 +150,9 @@ class BaseStrategy(ABC):
         if not cred:
             raise RuntimeError(f"No credential for account {account.name}")
 
-        client = TradovateClient()
+        # Route through user's dedicated IP
+        user = self.db.query(User).filter(User.id == cred.user_id).first()
+        client = get_proxied_client(user=user)
         token, error = client.login(cred.login_id, cred.password)
         if not token:
             raise RuntimeError(f"Login failed for {account.name}: {error}")
@@ -175,8 +177,8 @@ class BaseStrategy(ABC):
 
     def cancel_broker_order(self, account, broker_order_id: int) -> dict:
         """Cancel an order on the broker."""
-        from required_api.tradovate_client import TradovateClient
-        from models import BrokerCredential
+        from required_api.tradovate_client import get_proxied_client
+        from models import BrokerCredential, User
 
         if self.paper_mode:
             self.logger.info(f"[PAPER] Cancel order {broker_order_id} on {account.name}")
@@ -190,7 +192,9 @@ class BaseStrategy(ABC):
         if not cred:
             raise RuntimeError(f"No credential for account {account.name}")
 
-        client = TradovateClient()
+        # Route through user's dedicated IP
+        user = self.db.query(User).filter(User.id == cred.user_id).first()
+        client = get_proxied_client(user=user)
         token, error = client.login(cred.login_id, cred.password)
         if not token:
             raise RuntimeError(f"Login failed: {error}")

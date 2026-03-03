@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
-from models import Account, BrokerCredential
+from models import Account, BrokerCredential, User
 from schemas import AccountCreate, AccountResponse, AccountUpdate
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -100,7 +100,7 @@ def flatten_accounts(payload: BulkAccountIds, db: Session = Depends(get_db)):
     Cancels all working orders + closes all open positions with opposing market orders.
     """
     import logging
-    from required_api.tradovate_client import TradovateClient
+    from required_api.tradovate_client import get_proxied_client
 
     logger = logging.getLogger(__name__)
 
@@ -134,7 +134,9 @@ def flatten_accounts(payload: BulkAccountIds, db: Session = Depends(get_db)):
             continue
 
         try:
-            client = TradovateClient()
+            # Get the user for proxy routing
+            user = db.query(User).filter(User.id == cred.user_id).first()
+            client = get_proxied_client(user=user)
             token, error = client.login(cred.login_id, cred.password)
             if not token:
                 reports.append({
@@ -190,7 +192,7 @@ def sync_selected_accounts(payload: BulkAccountIds, db: Session = Depends(get_db
     """
     import logging
     from datetime import datetime, timezone
-    from required_api.tradovate_client import TradovateClient
+    from required_api.tradovate_client import get_proxied_client
 
     logger = logging.getLogger(__name__)
 
@@ -224,7 +226,9 @@ def sync_selected_accounts(payload: BulkAccountIds, db: Session = Depends(get_db
             continue
 
         try:
-            client = TradovateClient()
+            # Get the user for proxy routing
+            user = db.query(User).filter(User.id == cred.user_id).first()
+            client = get_proxied_client(user=user)
             token, error = client.login(cred.login_id, cred.password)
             if not token:
                 for acct in group["accounts"]:

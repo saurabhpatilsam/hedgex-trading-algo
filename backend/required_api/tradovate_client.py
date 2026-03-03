@@ -1,7 +1,12 @@
 """
 Tradovate Client mimicking TradingView integration.
 Allows login via username/password and fetching sub-accounts.
+
+When proxy_url and user_id are set, ALL outbound requests are routed
+through the Azure IP proxy VM so that Tradovate sees the user's
+dedicated static IP address.
 """
+import os
 import requests
 import urllib.parse
 from typing import Optional, Dict, List, Any
@@ -18,11 +23,71 @@ TRADOVATE_ACCOUNT_LIST_URL = "https://demo.tradovateapi.com/v1/account/list"
 TRADINGVIEW_ORIGIN = "https://www.tradingview.com"
 TRADER_TRADOVATE_ORIGIN = "https://trader.tradovate.com"
 
+# Proxy VM endpoints per region
+PROXY_URLS = {
+    "india": os.getenv("PROXY_URL_INDIA", "http://20.192.16.60:9000"),
+    "uk": os.getenv("PROXY_URL_UK", "http://20.50.127.77:9000"),
+}
+
+
 class TradovateClient:
-    def __init__(self):
+    def __init__(self, proxy_url: Optional[str] = None, user_id: Optional[int] = None):
+        """
+        Args:
+            proxy_url: Base URL of the proxy VM (e.g. http://20.192.16.60:9000)
+            user_id: The numeric user ID for IP routing through the proxy
+        """
         self.session = requests.Session()
         self.access_token: Optional[str] = None
         self.username: Optional[str] = None
+        self.proxy_url = proxy_url
+        self.user_id = user_id
+
+    def _proxied_request(self, method: str, url: str, headers: Dict = None,
+                         data: Any = None, json_body: Any = None,
+                         timeout: int = 30) -> requests.Response:
+        """Route a request through the proxy VM or send directly."""
+        if self.proxy_url and self.user_id:
+            # Send through proxy
+            proxy_payload = {
+                "user_id": self.user_id,
+                "method": method.upper(),
+                "url": url,
+                "headers": headers or {},
+                "timeout": timeout,
+            }
+            if json_body is not None:
+                proxy_payload["body"] = json_body
+            elif data is not None:
+                proxy_payload["body"] = data
+
+            logger.info(f"[PROXY user={self.user_id}] {method.upper()} {url} via {self.proxy_url}")
+            resp = self.session.post(
+                f"{self.proxy_url}/proxy",
+                json=proxy_payload,
+                timeout=timeout + 10,
+            )
+            resp.raise_for_status()
+            proxy_result = resp.json()
+
+            # Build a fake Response object from the proxy result
+            fake_resp = requests.models.Response()
+            fake_resp.status_code = proxy_result["status_code"]
+            fake_resp._content = (
+                requests.compat.json.dumps(proxy_result["body"]).encode("utf-8")
+                if isinstance(proxy_result["body"], (dict, list))
+                else str(proxy_result["body"]).encode("utf-8")
+            )
+            fake_resp.headers.update(proxy_result.get("headers", {}))
+            return fake_resp
+        else:
+            # Direct request (no proxy)
+            kwargs = {"headers": headers, "timeout": timeout}
+            if json_body is not None:
+                kwargs["json"] = json_body
+            elif data is not None:
+                kwargs["data"] = data
+            return getattr(self.session, method.lower())(url, **kwargs)
 
     def _build_tv_headers(self) -> Dict[str, str]:
         """Common headers used for Tradovate TV endpoints (simulating browser)."""
@@ -65,7 +130,7 @@ class TradovateClient:
 
         try:
             logger.info(f"Attempting login for user: {username}")
-            response = self.session.post(AUTH_URL, headers=headers, data=payload, timeout=15)
+            response = self._proxied_request("POST", AUTH_URL, headers=headers, data=payload, timeout=15)
             
             if response.status_code != 200:
                  err_msg = f"Login HTTP Error {response.status_code}: {response.text}"
@@ -130,7 +195,7 @@ class TradovateClient:
         # It adds Origin/Referer/Content-Type.
         
         try:
-            response = self.session.get(ACCOUNTS_URL, headers=headers, timeout=15)
+            response = self._proxied_request("GET", ACCOUNTS_URL, headers=headers, timeout=15)
             response.raise_for_status()
             data = response.json()
             
@@ -158,7 +223,7 @@ class TradovateClient:
         }
 
         try:
-            response = self.session.get(url, headers=headers, timeout=15)
+            response = self._proxied_request("GET", url, headers=headers, timeout=15)
             response.raise_for_status()
             return response.json()
         except Exception as e:
@@ -227,7 +292,7 @@ class TradovateClient:
         headers["Authorization"] = f"Bearer {self.access_token}"
         
         try:
-            response = self.session.get(url, headers=headers, timeout=15)
+            response = self._proxied_request("GET", url, headers=headers, timeout=15)
             response.raise_for_status()
             data = response.json()
             
@@ -256,7 +321,7 @@ class TradovateClient:
         }
         
         try:
-            response = self.session.get(url, headers=headers, timeout=15)
+            response = self._proxied_request("GET", url, headers=headers, timeout=15)
             response.raise_for_status()
             return response.json()  # Returns list of contracts like [{'id': 4086428, 'name': 'NQH6', ...}]
         except Exception as e:
@@ -307,7 +372,7 @@ class TradovateClient:
         logger.info(f"Placing order: {action} {qty}x {symbol} on account {account_spec} (id={account_id})")
 
         try:
-            response = self.session.post(url, json=payload, headers=headers, timeout=30)
+            response = self._proxied_request("POST", url, headers=headers, json_body=payload, timeout=30)
             response.raise_for_status()
             result = response.json()
             logger.info(f"Order placed successfully: {result}")
@@ -338,7 +403,7 @@ class TradovateClient:
         payload = {"orderId": order_id}
 
         try:
-            response = self.session.post(url, json=payload, headers=headers, timeout=15)
+            response = self._proxied_request("POST", url, headers=headers, json_body=payload, timeout=15)
             response.raise_for_status()
             return response.json()
         except Exception as e:
@@ -360,7 +425,7 @@ class TradovateClient:
         }
 
         try:
-            response = self.session.get(url, headers=headers, timeout=15)
+            response = self._proxied_request("GET", url, headers=headers, timeout=15)
             response.raise_for_status()
             positions = response.json()
             # Filter by account
@@ -384,7 +449,7 @@ class TradovateClient:
         }
 
         try:
-            response = self.session.get(url, headers=headers, timeout=15)
+            response = self._proxied_request("GET", url, headers=headers, timeout=15)
             response.raise_for_status()
             orders = response.json()
             return [o for o in orders if o.get("accountId") == account_id]
@@ -452,7 +517,7 @@ class TradovateClient:
                     "Authorization": f"Bearer {self.access_token}",
                     "Accept": "application/json",
                 }
-                resp = self.session.get(url, headers=headers, timeout=10)
+                resp = self._proxied_request("GET", url, headers=headers, timeout=10)
                 resp.raise_for_status()
                 contract_data = resp.json()
                 symbol = contract_data.get("name", "")
@@ -488,3 +553,32 @@ class TradovateClient:
         return report
 
 
+def get_proxied_client(user=None, user_id: int = None, proxy_region: str = None) -> TradovateClient:
+    """
+    Factory: create a TradovateClient that routes through the user's proxy IP.
+
+    Usage from routers:
+        from required_api.tradovate_client import get_proxied_client
+        client = get_proxied_client(user=user_obj)
+        # or
+        client = get_proxied_client(user_id=1, proxy_region='india')
+
+    If no user/region, returns a direct (non-proxied) client.
+    """
+    uid = None
+    region = None
+
+    if user is not None:
+        uid = user.id
+        region = getattr(user, 'proxy_region', None)
+    elif user_id is not None:
+        uid = user_id
+        region = proxy_region
+
+    if uid and region and region in PROXY_URLS:
+        proxy_url = PROXY_URLS[region]
+        logger.info(f"Creating proxied client: user={uid}, region={region}, proxy={proxy_url}")
+        return TradovateClient(proxy_url=proxy_url, user_id=uid)
+    else:
+        logger.info(f"Creating direct client (no proxy): user={uid}, region={region}")
+        return TradovateClient()

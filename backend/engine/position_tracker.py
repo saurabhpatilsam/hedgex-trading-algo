@@ -109,8 +109,8 @@ class PositionTracker:
 
     def get_broker_positions(self, account) -> list[dict]:
         """Fetch live positions from the broker for reconciliation."""
-        from required_api.tradovate_client import TradovateClient
-        from models import BrokerCredential
+        from required_api.tradovate_client import get_proxied_client
+        from models import BrokerCredential, User
 
         cred = (
             self.db.query(BrokerCredential)
@@ -120,7 +120,9 @@ class PositionTracker:
         if not cred:
             return []
 
-        client = TradovateClient()
+        # Route through user's dedicated IP
+        user = self.db.query(User).filter(User.id == cred.user_id).first()
+        client = get_proxied_client(user=user)
         token, error = client.login(cred.login_id, cred.password)
         if not token:
             logger.error(f"Cannot fetch broker positions: {error}")

@@ -82,7 +82,8 @@ def sync_instruments(user_id: int, db: Session = Depends(get_db)):
     Given a user ID, finds a valid Tradovate credential, authenticates, 
     and fetches the latest active contracts for predefined popular symbols.
     """
-    from required_api.tradovate_client import TradovateClient
+    from required_api.tradovate_client import get_proxied_client
+    from models import User
     
     cred = (
         db.query(BrokerCredential)
@@ -92,7 +93,8 @@ def sync_instruments(user_id: int, db: Session = Depends(get_db)):
     if not cred:
         raise HTTPException(status_code=400, detail="User has no valid Tradovate/Apex credentials to sync instruments from.")
         
-    client = TradovateClient()
+    user = db.query(User).filter(User.id == user_id).first()
+    client = get_proxied_client(user=user)
     token, error = client.login(cred.login_id, cred.password)
     if not token:
         raise HTTPException(status_code=400, detail=f"Failed to login to Tradovate: {error}")

@@ -131,12 +131,12 @@ def add_credential(user_id: int, payload: BrokerCredentialCreate, db: Session = 
         raise HTTPException(status_code=404, detail="User not found")
 
     # Try to authenticate and fetch sub-accounts if applicable
-    from required_api.tradovate_client import TradovateClient
+    from required_api.tradovate_client import get_proxied_client
     
     fetched_accounts = []
     error_message = None
     if payload.broker in ["Tradovate", "Apex"]:  # Support both as they use same API usually
-        client = TradovateClient()
+        client = get_proxied_client(user=user)
         token, error = client.login(payload.login_id, payload.password)
         if not token:
             error_message = _shorten_error(error)
@@ -257,13 +257,15 @@ def delete_credential(user_id: int, cred_id: int, db: Session = Depends(get_db))
 
 
 def _sync_single_credential(cred: BrokerCredential, db: Session):
-    from required_api.tradovate_client import TradovateClient
+    from required_api.tradovate_client import get_proxied_client
     from datetime import datetime, timezone
     
     if cred.broker not in ["Tradovate", "Apex"]:
         return False, "Broker not supported for sync"
 
-    client = TradovateClient()
+    # Get the user for proxy routing
+    user = db.query(User).filter(User.id == cred.user_id).first()
+    client = get_proxied_client(user=user)
     token, error = client.login(cred.login_id, cred.password)
     if not token:
         cred.error_message = _shorten_error(error)
