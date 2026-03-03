@@ -377,23 +377,31 @@ export default function AccountManager() {
 
             {/* Add User Inline */}
             {showAddUser && (
-                <form onSubmit={handleAddUser} className="inst-add-form" style={{ marginBottom: 16, gap: 8 }}>
-                    <input
-                        type="text" value={newUserName}
-                        onChange={(e) => setNewUserName(e.target.value)}
-                        placeholder="User name (e.g. Saurabh)" required autoFocus
-                        style={{ flex: 1 }}
-                    />
-                    <select
-                        value={newUserRegion}
-                        onChange={(e) => setNewUserRegion(e.target.value)}
-                        className="region-select"
-                        title="IP Region"
-                    >
-                        <option value="india">🇮🇳 India</option>
-                        <option value="uk">🇬🇧 UK</option>
-                    </select>
-                    <button type="submit" className="btn btn-sm btn-primary">Create</button>
+                <form onSubmit={handleAddUser} className="add-user-form">
+                    <div className="username-input-wrapper">
+                        <input
+                            type="text"
+                            className="username-input"
+                            value={newUserName}
+                            onChange={(e) => setNewUserName(e.target.value)}
+                            placeholder="Enter Username (e.g. Saurabh)"
+                            required
+                            autoFocus
+                        />
+                    </div>
+                    <div className="ip-select-wrapper">
+                        <label className="ip-select-label">IP Region:</label>
+                        <select
+                            value={newUserRegion}
+                            onChange={(e) => setNewUserRegion(e.target.value)}
+                            className="region-select"
+                            title="IP Region"
+                        >
+                            <option value="india">🇮🇳 India</option>
+                            <option value="uk">🇬🇧 UK</option>
+                        </select>
+                    </div>
+                    <button type="submit" className="btn btn-sm btn-primary">Create User</button>
                     <button type="button" className="btn btn-sm btn-cancel" onClick={() => setShowAddUser(false)}>Cancel</button>
                 </form>
             )}
