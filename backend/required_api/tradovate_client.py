@@ -43,10 +43,42 @@ class TradovateClient:
         self.proxy_url = proxy_url
         self.user_id = user_id
 
+    def _log_request_to_db(self, method: str, url: str, status_code: int, request_payload: str, response_snippet: str):
+        """Helper to log API request and response data to the database."""
+        try:
+            from database import SessionLocal
+            from models import RequestLog
+            from datetime import datetime, timezone
+
+            db = SessionLocal()
+            try:
+                log_entry = RequestLog(
+                    user_id=self.user_id,
+                    method=method.upper(),
+                    url=url,
+                    status_code=status_code,
+                    request_payload=request_payload[:2000] if request_payload else None,
+                    response_snippet=response_snippet[:2000] if response_snippet else None,
+                    timestamp=datetime.now(timezone.utc)
+                )
+                db.add(log_entry)
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Failed to log request to DB: {e}")
+
     def _proxied_request(self, method: str, url: str, headers: Dict = None,
                          data: Any = None, json_body: Any = None,
                          timeout: int = 30) -> requests.Response:
         """Route a request through the proxy VM or send directly."""
+        import json
+        req_payload_str = ""
+        if json_body is not None:
+            req_payload_str = json.dumps(json_body)
+        elif data is not None:
+            req_payload_str = str(data)
+
         if self.proxy_url and self.user_id:
             # Send through proxy
             proxy_payload = {
@@ -73,12 +105,19 @@ class TradovateClient:
             # Build a fake Response object from the proxy result
             fake_resp = requests.models.Response()
             fake_resp.status_code = proxy_result["status_code"]
+            
+            resp_body = proxy_result["body"]
             fake_resp._content = (
-                requests.compat.json.dumps(proxy_result["body"]).encode("utf-8")
-                if isinstance(proxy_result["body"], (dict, list))
-                else str(proxy_result["body"]).encode("utf-8")
+                json.dumps(resp_body).encode("utf-8")
+                if isinstance(resp_body, (dict, list))
+                else str(resp_body).encode("utf-8")
             )
             fake_resp.headers.update(proxy_result.get("headers", {}))
+            
+            # Log to DB
+            resp_snippet_str = fake_resp._content.decode("utf-8") if fake_resp._content else ""
+            self._log_request_to_db(method, url, fake_resp.status_code, req_payload_str, resp_snippet_str)
+
             return fake_resp
         else:
             # Direct request (no proxy)
@@ -87,7 +126,13 @@ class TradovateClient:
                 kwargs["json"] = json_body
             elif data is not None:
                 kwargs["data"] = data
-            return getattr(self.session, method.lower())(url, **kwargs)
+            
+            resp = getattr(self.session, method.lower())(url, **kwargs)
+            
+            # Log to DB
+            self._log_request_to_db(method, url, resp.status_code, req_payload_str, resp.text)
+            
+            return resp
 
     def _build_tv_headers(self) -> Dict[str, str]:
         """Common headers used for Tradovate TV endpoints (simulating browser)."""

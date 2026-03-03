@@ -3,6 +3,7 @@ import AccountManager from "./components/AccountManager";
 import GroupManager from "./components/GroupManager";
 import StrategyPanel from "./components/StrategyPanel";
 import TradingDashboard from "./components/TradingDashboard";
+import NetworkLogs from "./components/NetworkLogs";
 import "./App.css";
 
 const TABS = [
@@ -10,6 +11,7 @@ const TABS = [
   { id: "accounts", label: "Accounts", icon: "👥" },
   { id: "groups", label: "Groups", icon: "🔗" },
   { id: "strategy", label: "Strategy Control", icon: "⚡" },
+  { id: "logs", label: "Network Logs", icon: "📡" },
 ];
 
 function App() {
@@ -49,6 +51,7 @@ function App() {
         {activeTab === "accounts" && <AccountManager />}
         {activeTab === "groups" && <GroupManager />}
         {activeTab === "strategy" && <StrategyPanel />}
+        {activeTab === "logs" && <NetworkLogs />}
       </main>
     </div>
   );

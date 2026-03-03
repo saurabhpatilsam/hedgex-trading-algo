@@ -223,3 +223,19 @@ class TradeResponse(BaseModel):
     broker_status: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+# ── System / Network Log Schemas ───────────────────────────────────────────
+
+
+class RequestLogResponse(BaseModel):
+    id: int
+    user_id: Optional[int] = None
+    method: str
+    url: str
+    status_code: Optional[int] = None
+    request_payload: Optional[str] = None
+    response_snippet: Optional[str] = None
+    timestamp: datetime
+
+    model_config = {"from_attributes": True}

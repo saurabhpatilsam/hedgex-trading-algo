@@ -120,6 +120,14 @@ def delete_user(user_id: int, db: Session = Depends(get_db)):
     db.commit()
     return None
 
+@router.get("/logs/all")
+def get_all_logs(limit: int = 100, db: Session = Depends(get_db)):
+    """Fetch recent API requests across all users."""
+    from models import RequestLog
+    from schemas import RequestLogResponse
+    logs = db.query(RequestLog).order_by(RequestLog.id.desc()).limit(limit).all()
+    
+    return [RequestLogResponse.model_validate(log) for log in logs]
 
 # ── Broker Credentials ──────────────────────────────────────
 

@@ -293,3 +293,21 @@ class SystemAlert(Base):
     strategy_id = Column(Integer, nullable=True)
     is_read = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class RequestLog(Base):
+    """
+    Logs all API requests outgoing and incoming for frontend visibility.
+    """
+    __tablename__ = "request_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    method = Column(String, nullable=False)
+    url = Column(String, nullable=False)
+    status_code = Column(Integer, nullable=True)
+    request_payload = Column(Text, nullable=True)
+    response_snippet = Column(Text, nullable=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User")
