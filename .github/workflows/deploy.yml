@@ -1,0 +1,98 @@
+name: 🚀 Deploy HedgeX
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  # ── Frontend → Vercel ─────────────────────────────────────
+  deploy-frontend:
+    name: 🌐 Frontend → Vercel
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.modified, 'frontend/') || contains(github.event.head_commit.added, 'frontend/') }}
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: Pull Vercel Environment
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Build
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Deploy to Vercel
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+  # ── Backend → Azure VM ────────────────────────────────────
+  deploy-backend:
+    name: 🖥️ Backend → Azure VM
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.modified, 'backend/') || contains(github.event.head_commit.added, 'backend/') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy backend to VM
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 20.192.16.60
+          username: stagnator
+          key: ${{ secrets.VM_SSH_KEY }}
+          script_stop: true
+          script: |
+            echo "📦 Deploying backend..."
+            
+            # Create temp dir for new code
+            TEMP_DIR=$(mktemp -d)
+            
+            # Pull latest code from GitHub
+            cd $TEMP_DIR
+            git clone --depth 1 https://github.com/${{ github.repository }}.git repo
+            
+            # Copy backend files to production directory
+            sudo cp -r repo/backend/* /opt/hedgex-api/
+            
+            # Install any new dependencies
+            cd /opt/hedgex-api
+            sudo /opt/hedgex-api/.venv/bin/pip install -r requirements.txt -q
+            
+            # Restart the service
+            sudo systemctl restart hedgex-api
+            
+            # Wait and verify
+            sleep 3
+            if sudo systemctl is-active --quiet hedgex-api; then
+              echo "✅ Backend deployed and running!"
+              curl -s http://localhost:8000/ | head -1
+            else
+              echo "❌ Backend failed to start!"
+              sudo journalctl -u hedgex-api --no-pager -n 15
+              exit 1
+            fi
+            
+            # Cleanup
+            rm -rf $TEMP_DIR
+            echo "🎉 Deployment complete!"

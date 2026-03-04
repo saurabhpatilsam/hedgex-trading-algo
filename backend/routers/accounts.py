@@ -85,9 +85,28 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    # Remove from any groups first
+    from models import GroupMembership
+    db.query(GroupMembership).filter(GroupMembership.account_id == account_id).delete()
     db.delete(account)
     db.commit()
     return None
+
+
+@router.post("/bulk-delete")
+def bulk_delete_accounts(payload: BulkAccountIds, db: Session = Depends(get_db)):
+    """Delete multiple sub-accounts at once."""
+    from models import GroupMembership
+    accounts = db.query(Account).filter(Account.id.in_(payload.account_ids)).all()
+    if not accounts:
+        raise HTTPException(status_code=404, detail="No accounts found")
+    deleted_count = 0
+    for acct in accounts:
+        db.query(GroupMembership).filter(GroupMembership.account_id == acct.id).delete()
+        db.delete(acct)
+        deleted_count += 1
+    db.commit()
+    return {"deleted": deleted_count}
 
 
 # ── Bulk Operations ────────────────────────────────────────

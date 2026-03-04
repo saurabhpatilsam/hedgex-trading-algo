@@ -290,8 +290,29 @@ def _sync_single_credential(cred: BrokerCredential, db: Session):
         db.commit()
         return False, cred.error_message
 
-    current_accounts = {acc.name: acc for acc in cred.accounts}
+    # Build lookup maps for existing accounts (by name AND account_number)
+    current_by_name = {acc.name: acc for acc in cred.accounts}
+    current_by_number = {acc.account_number: acc for acc in cred.accounts if acc.account_number}
+    
+    # Fetch drawdown data from Tradovate (peak, width, drawdown_limit per account)
+    # peak = maxNetLiq (highest balance ever), width = trailingMaxDrawdown
+    # drawdown_limit = peak - width (the auto-liq threshold)
+    dd_params = {}
+    try:
+        dd_params = client.get_drawdown_limits()
+    except Exception:
+        pass
+
+    # Deduplicate fetched accounts by name (TV + Tradovate merge can return dupes)
+    seen_names = set()
+    unique_accounts = []
     for acc_data in fetched_accounts:
+        name = acc_data.get("name")
+        if name and name not in seen_names:
+            seen_names.add(name)
+            unique_accounts.append(acc_data)
+
+    for acc_data in unique_accounts:
         name = acc_data.get("name")
         if not name:
             continue
@@ -299,6 +320,7 @@ def _sync_single_credential(cred: BrokerCredential, db: Session):
         is_active = acc_data.get("active", True)
         balance = 0.0
         tradovate_id = acc_data.get("tradovate_id")
+        
         if tradovate_id:
             try:
                 state_info = client.get_account_balance(tradovate_id)
@@ -306,12 +328,38 @@ def _sync_single_credential(cred: BrokerCredential, db: Session):
             except Exception:
                 pass
 
-        if name in current_accounts:
-            current_accounts[name].is_active = is_active
-            current_accounts[name].balance = balance
-            current_accounts[name].last_updated_at = datetime.now(timezone.utc)
+        # Get drawdown data for this account from Tradovate
+        peak = None
+        width = None
+        dd_limit = None
+        if tradovate_id and int(tradovate_id) in dd_params:
+            params = dd_params[int(tradovate_id)]
+            peak = params.get("peak")        # maxNetLiq from accountRiskStatus
+            width = params.get("width")       # trailingMaxDrawdown from userAccountAutoLiq
+            dd_limit = params.get("drawdown_limit")  # peak - width
+
+        if name in current_by_name:
+            acct = current_by_name[name]
+        elif name in current_by_number:
+            acct = current_by_number[name]
+        else:
+            acct = None
+
+        if acct:
+            acct.is_active = is_active
+            acct.balance = balance
+            acct.last_updated_at = datetime.now(timezone.utc)
             if tradovate_id:
-                current_accounts[name].tradovate_account_id = int(tradovate_id)
+                acct.tradovate_account_id = int(tradovate_id)
+            
+            # Update from Tradovate data
+            if peak and peak > 0:
+                acct.peak_balance = peak
+            if width and width > 0:
+                acct.trailing_drawdown = width
+            if dd_limit and dd_limit > 0:
+                acct.drawdown_limit = dd_limit
+            
         else:
             new_account = Account(
                 name=name,
@@ -320,13 +368,16 @@ def _sync_single_credential(cred: BrokerCredential, db: Session):
                 tradovate_account_id=int(tradovate_id) if tradovate_id else None,
                 is_active=is_active,
                 balance=balance,
+                peak_balance=peak,
+                trailing_drawdown=width,
+                drawdown_limit=dd_limit,
                 last_updated_at=datetime.now(timezone.utc)
             )
             db.add(new_account)
     
     cred.last_synced_at = datetime.now(timezone.utc)
     db.commit()
-    return True, f"Successfully synced {len(fetched_accounts)} sub-accounts."
+    return True, f"Successfully synced {len(unique_accounts)} sub-accounts."
 
 
 @router.post("/{user_id}/credentials/{cred_id}/sync", status_code=200)
@@ -360,7 +411,18 @@ def sync_all_user_credentials(user_id: int, db: Session = Depends(get_db)):
     for cred in user.credentials:
         # Only attempt to sync Tradovate/Apex for now
         if cred.broker in ["Tradovate", "Apex"]:
-            success, msg = _sync_single_credential(cred, db)
-            sync_results.append({"broker": cred.broker, "login_id": cred.login_id, "success": success, "message": msg})
+            try:
+                success, msg = _sync_single_credential(cred, db)
+                sync_results.append({"broker": cred.broker, "login_id": cred.login_id, "success": success, "message": msg})
+            except Exception as e:
+                import traceback
+                tb = traceback.format_exc()
+                sync_results.append({
+                    "broker": cred.broker,
+                    "login_id": cred.login_id,
+                    "success": False,
+                    "message": f"Exception: {str(e)}",
+                    "traceback": tb
+                })
 
     return {"message": "Sync complete", "results": sync_results}

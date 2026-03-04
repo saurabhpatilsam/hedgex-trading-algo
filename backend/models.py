@@ -111,6 +111,9 @@ class Account(Base):
     account_number = Column(String, default="")
     tradovate_account_id = Column(Integer, nullable=True)
     balance = Column(Float, default=0.0)
+    peak_balance = Column(Float, nullable=True)      # Highest balance ever seen (our watermark)
+    trailing_drawdown = Column(Float, nullable=True)  # Broker's trailing DD width (e.g. $2500)
+    drawdown_limit = Column(Float, nullable=True)     # Computed: peak_balance - trailing_drawdown
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     last_updated_at = Column(DateTime, nullable=True)

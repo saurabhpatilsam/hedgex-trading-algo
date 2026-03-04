@@ -26,6 +26,9 @@ class AccountResponse(BaseModel):
     credential_id: int
     account_number: str
     balance: float = 0.0
+    peak_balance: Optional[float] = None
+    trailing_drawdown: Optional[float] = None
+    drawdown_limit: Optional[float] = None
     is_active: bool
     created_at: datetime
     last_updated_at: Optional[datetime] = None

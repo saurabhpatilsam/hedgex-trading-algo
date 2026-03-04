@@ -1,4 +1,4 @@
-const API_BASE = (import.meta.env.VITE_API_URL || "http://localhost:8000") + "/api";
+const API_BASE = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL + "/api" : (import.meta.env.PROD ? "/api" : "http://localhost:8000/api");
 
 async function request(path, options = {}) {
     const res = await fetch(`${API_BASE}${path}`, {
@@ -53,6 +53,11 @@ export const accountsApi = {
         }),
     syncSelected: (accountIds) =>
         request("/accounts/sync", {
+            method: "POST",
+            body: JSON.stringify({ account_ids: accountIds }),
+        }),
+    bulkDelete: (accountIds) =>
+        request("/accounts/bulk-delete", {
             method: "POST",
             body: JSON.stringify({ account_ids: accountIds }),
         }),

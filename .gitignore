@@ -28,6 +28,11 @@ build/
 .env
 .env.local
 .env.production
+.env.*
+*.pem
+
+# Vercel
+.vercel/
 
 # Logs
 *.log

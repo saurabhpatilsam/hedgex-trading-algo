@@ -2345,8 +2345,9 @@ body {
   border: 1px solid var(--bg-4);
   border-radius: 10px;
   padding: 14px 16px;
-  min-width: 240px;
-  flex: 0 1 auto;
+  min-width: 540px;
+  max-width: 100%;
+  flex: 1 1 auto;
   transition: all 0.2s;
 }
 
@@ -2440,7 +2441,7 @@ body {
 
 .creds-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(2, 1fr);
   gap: 16px;
   padding: 8px 0;
 }
@@ -2570,9 +2571,9 @@ body {
 
 .sub-list-scroll {
   flex: 1;
-  max-height: 180px;
+  max-height: 320px;
   overflow-y: auto;
-  padding: 8px 14px;
+  padding: 8px 12px;
 }
 
 .sub-empty-compact {
@@ -2587,13 +2588,22 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--bg-4);
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-xs);
   font-size: 13px;
+  transition: all 0.2s var(--ease);
+}
+
+.sub-acct-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .sub-acct-row:last-child {
-  border-bottom: none;
+  margin-bottom: 0;
 }
 
 .sub-name {
@@ -2605,7 +2615,9 @@ body {
 .sub-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: 8px;
 }
 
 .icon-btn-xs {
@@ -3552,19 +3564,103 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  transition: background 0.15s, border-color 0.15s;
+  transition: all 0.2s var(--ease);
 }
 
 .sub-acct-row.sub-acct-selected {
+  background: rgba(139, 92, 246, 0.1) !important;
+  border-color: rgba(139, 92, 246, 0.3) !important;
+  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.15) inset;
+}
+
+/* ── Compact Table Row Sub-Account Layout ──────────────── */
+.sub-acct-compact {
+  display: grid;
+  grid-template-columns: 24px 1fr 90px 90px 90px 90px 50px;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  margin-bottom: 2px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sub-acct-compact:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.sub-acct-compact.sub-acct-selected {
   background: rgba(139, 92, 246, 0.08) !important;
-  border-left: 3px solid var(--accent-1, #8b5cf6);
-  padding-left: 5px;
+  border-color: rgba(139, 92, 246, 0.25) !important;
+}
+
+.sub-compact-name {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--gray-200);
+  font-family: 'JetBrains Mono', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+}
+
+.sub-compact-metric {
+  font-size: 11.5px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--gray-300);
+  text-align: right;
+  font-weight: 600;
+}
+
+.sub-actions-compact {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  justify-content: flex-end;
+}
+
+/* Add a column header row for the sub-account table */
+.sub-header-compact {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* ── Bulk Delete Button ─────────────────────────────────── */
+.btn-bulk-delete {
+  padding: 6px 14px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.btn-bulk-delete:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.5);
 }
 
 .sub-acct-info {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 
 /* Select-all per broker */

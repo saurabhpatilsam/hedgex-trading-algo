@@ -350,6 +350,66 @@ class TradovateClient:
             logger.error(f"Error fetching balance for {account_id}: {e}")
             return {}
 
+    def get_drawdown_limits(self) -> Dict[int, Dict]:
+        """
+        Fetch the trailing drawdown data per account from Tradovate.
+        
+        Uses TWO endpoints:
+        - accountRiskStatus/list → maxNetLiq (the peak balance / high watermark)
+        - userAccountAutoLiq/list → trailingMaxDrawdown (the trailing width, e.g. $2,500)
+        
+        The auto-liquidation threshold = maxNetLiq - trailingMaxDrawdown
+        
+        Returns Dict[account_id, {
+            "peak": float,           # maxNetLiq — highest balance ever reached
+            "width": float,          # trailingMaxDrawdown — the trailing distance
+            "drawdown_limit": float  # peak - width = auto-liq threshold
+        }]
+        """
+        if not self.access_token:
+            return {}
+        
+        headers = {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
+        
+        # Step 1: Get maxNetLiq (peak balance) from accountRiskStatus
+        peaks = {}
+        try:
+            resp = self._proxied_request("GET", "https://demo.tradovateapi.com/v1/accountRiskStatus/list", headers=headers, timeout=15)
+            resp.raise_for_status()
+            for item in resp.json():
+                if "id" in item and "maxNetLiq" in item:
+                    peaks[int(item["id"])] = float(item["maxNetLiq"])
+        except Exception as e:
+            logger.error(f"Error fetching accountRiskStatus: {e}")
+        
+        # Step 2: Get trailingMaxDrawdown (width) from userAccountAutoLiq
+        widths = {}
+        try:
+            resp = self._proxied_request("GET", "https://demo.tradovateapi.com/v1/userAccountAutoLiq/list", headers=headers, timeout=15)
+            resp.raise_for_status()
+            for item in resp.json():
+                if "id" in item:
+                    widths[int(item["id"])] = float(item.get("trailingMaxDrawdown", 0.0))
+        except Exception as e:
+            logger.error(f"Error fetching userAccountAutoLiq: {e}")
+        
+        # Step 3: Compute drawdown_limit per account
+        result = {}
+        all_ids = set(peaks.keys()) | set(widths.keys())
+        for acct_id in all_ids:
+            peak = peaks.get(acct_id, 0.0)
+            width = widths.get(acct_id, 0.0)
+            dd_limit = (peak - width) if peak > 0 and width > 0 else 0.0
+            
+            result[acct_id] = {
+                "peak": peak,
+                "width": width,
+                "drawdown_limit": dd_limit,
+            }
+            logger.info(f"Drawdown for {acct_id}: peak=${peak:.2f}, width=${width:.2f}, auto_liq=${dd_limit:.2f}")
+        
+        return result
+
     def search_contracts(self, text: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
         Search for active contracts by ticker (e.g., 'NQ', 'ES').

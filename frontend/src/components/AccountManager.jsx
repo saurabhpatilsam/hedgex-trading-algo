@@ -145,6 +145,22 @@ export default function AccountManager() {
         setFlattenResult(null);
     };
 
+    const handleBulkDelete = async () => {
+        if (selectedAccounts.size === 0) return;
+        if (!confirm(`Delete ${selectedAccounts.size} selected account(s)? This cannot be undone.`)) return;
+        setBulkLoading(true);
+        clearAlerts();
+        try {
+            const res = await accountsApi.bulkDelete([...selectedAccounts]);
+            setSuccess(`Deleted ${res.deleted} account(s)`);
+            setSelectedAccounts(new Set());
+            await load();
+        } catch (e) {
+            setError(e.message);
+        }
+        setBulkLoading(false);
+    };
+
     // ── User CRUD ────────────────────────────────────────
     const handleAddUser = async (e) => {
         e.preventDefault();
@@ -322,6 +338,13 @@ export default function AccountManager() {
                             disabled={bulkLoading}
                         >
                             {bulkLoading ? "⏳ Syncing..." : "🔄 Refresh Selected"}
+                        </button>
+                        <button
+                            className="btn-bulk-delete"
+                            onClick={handleBulkDelete}
+                            disabled={bulkLoading}
+                        >
+                            🗑 Delete Selected
                         </button>
                         <button
                             className={`btn-bulk-kill ${flattenConfirm ? "confirming" : ""}`}
@@ -532,49 +555,46 @@ export default function AccountManager() {
                                                             {(!cred.accounts || cred.accounts.length === 0) ? (
                                                                 <div className="sub-empty-compact">No accounts</div>
                                                             ) : (
-                                                                cred.accounts.map(acct => {
-                                                                    const isSelected = selectedAccounts.has(acct.id);
-                                                                    return (
-                                                                        <div
-                                                                            key={acct.id}
-                                                                            className={`sub-acct-row ${isSelected ? "sub-acct-selected" : ""}`}
-                                                                        >
-                                                                            <label
-                                                                                className="sub-acct-checkbox"
-                                                                                onClick={(e) => e.stopPropagation()}
-                                                                            >
-                                                                                <input
-                                                                                    type="checkbox"
-                                                                                    checked={isSelected}
-                                                                                    onChange={() => toggleSelect(acct.id)}
-                                                                                />
-                                                                            </label>
+                                                                [...cred.accounts]
+                                                                    .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+                                                                    .map(acct => {
+                                                                        const isSelected = selectedAccounts.has(acct.id);
+                                                                        const hasDD = acct.drawdown_limit > 0;
+                                                                        const buffer = hasDD ? acct.balance - acct.drawdown_limit : null;
+                                                                        const bufferColor = !hasDD ? "var(--gray-600)"
+                                                                            : buffer < 0 ? "#ef4444"
+                                                                                : buffer < 500 ? "#ef4444"
+                                                                                    : buffer < 1000 ? "#f59e0b"
+                                                                                        : "#4ade80";
+                                                                        return (
                                                                             <div
-                                                                                className="sub-acct-info"
+                                                                                key={acct.id}
+                                                                                className={`sub-acct-compact ${isSelected ? "sub-acct-selected" : ""}`}
                                                                                 onClick={() => toggleSelect(acct.id)}
-                                                                                style={{ cursor: "pointer", flex: 1 }}
                                                                             >
-                                                                                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                                                                                    {acct.last_updated_at && (
-                                                                                        <span style={{ fontSize: "0.68rem", color: "var(--gray-400)", fontFamily: "monospace", letterSpacing: "0.5px" }}>
-                                                                                            {new Date(acct.last_updated_at).toLocaleDateString([], { day: '2-digit', month: 'short' }).toUpperCase()} • {new Date(acct.last_updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase()}
-                                                                                        </span>
-                                                                                    )}
-                                                                                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                                                                        <span className="sub-name" title={acct.name} style={{ fontWeight: 600, fontSize: "13px", color: "var(--gray-100)" }}>{acct.name}</span>
-                                                                                        <span style={{ fontWeight: 700, color: "var(--accent-1)", fontSize: "13px" }}>
-                                                                                            ${acct.balance ? acct.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}
-                                                                                        </span>
-                                                                                    </div>
+                                                                                <label className="sub-acct-checkbox" onClick={(e) => e.stopPropagation()}>
+                                                                                    <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(acct.id)} />
+                                                                                </label>
+                                                                                <span className="sub-compact-name" title={acct.name}>{acct.name}</span>
+                                                                                <span className="sub-compact-metric" style={{ fontWeight: 700, color: "var(--gray-100)" }}>
+                                                                                    ${acct.balance ? acct.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}
+                                                                                </span>
+                                                                                <span className="sub-compact-metric" style={{ fontWeight: 700, color: bufferColor }}>
+                                                                                    {hasDD ? (buffer < 0 ? "BREACH" : `$${buffer.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`) : "—"}
+                                                                                </span>
+                                                                                <span className="sub-compact-metric">
+                                                                                    {acct.drawdown_limit > 0 ? `$${acct.drawdown_limit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                                                                                </span>
+                                                                                <span className="sub-compact-metric">
+                                                                                    {acct.peak_balance ? `$${acct.peak_balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                                                                                </span>
+                                                                                <div className="sub-actions-compact" onClick={(e) => e.stopPropagation()}>
+                                                                                    <button className="icon-btn-xs" onClick={() => openEditSubAccount(acct)}>✏️</button>
+                                                                                    <button className="icon-btn-xs danger" onClick={() => handleDeleteSubAccount(acct.id)}>✕</button>
                                                                                 </div>
                                                                             </div>
-                                                                            <div className="sub-actions">
-                                                                                <button className="icon-btn-xs" onClick={() => openEditSubAccount(acct)}>✏️</button>
-                                                                                <button className="icon-btn-xs danger" onClick={() => handleDeleteSubAccount(acct.id)}>✕</button>
-                                                                            </div>
-                                                                        </div>
-                                                                    );
-                                                                })
+                                                                        );
+                                                                    })
                                                             )}
                                                         </div>
                                                     </div>
