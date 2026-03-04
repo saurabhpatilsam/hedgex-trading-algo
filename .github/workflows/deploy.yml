@@ -10,7 +10,6 @@ jobs:
   deploy-frontend:
     name: 🌐 Frontend → Vercel
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.modified, 'frontend/') || contains(github.event.head_commit.added, 'frontend/') }}
     defaults:
       run:
         working-directory: frontend
@@ -49,7 +48,6 @@ jobs:
   deploy-backend:
     name: 🖥️ Backend → Azure VM
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.modified, 'backend/') || contains(github.event.head_commit.added, 'backend/') }}
 
     steps:
       - name: Checkout
