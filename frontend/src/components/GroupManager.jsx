@@ -246,9 +246,9 @@ export default function GroupManager() {
             {/* ── Account Pool (always at top) ──────────── */}
             <div className="avail-accounts-section">
                 <h4>All Accounts <small>(drag into a group's POT-L or POT-S zone below)</small></h4>
-                <div className="avail-chips">
+                <div className="owner-pool-grid">
                     {activeAccounts.length === 0 && (
-                        <div className="zone-empty" style={{ padding: "12px" }}>
+                        <div className="zone-empty" style={{ padding: "12px", gridColumn: "1 / -1" }}>
                             No accounts yet. Go to the Accounts tab to create some.
                         </div>
                     )}
@@ -260,9 +260,11 @@ export default function GroupManager() {
                             return acc;
                         }, {})
                     ).sort(([a], [b]) => a.localeCompare(b)).map(([owner, accounts]) => (
-                        <div key={owner} className="owner-section">
-                            <div className="owner-header">{owner}</div>
-                            <div className="owner-accounts">
+                        <div key={owner} className="owner-pool-card">
+                            <div className="owner-pool-header">
+                                {owner} <span className="owner-pool-count">{accounts.length}</span>
+                            </div>
+                            <div className="owner-pool-list">
                                 {accounts.map((a) => (
                                     <div
                                         key={a.id}
@@ -359,9 +361,11 @@ export default function GroupManager() {
                                                     return acc;
                                                 }, {})
                                             ).sort(([a], [b]) => a.localeCompare(b)).map(([owner, ids]) => (
-                                                <div key={owner} className="owner-section">
-                                                    <div className="owner-header">{owner}</div>
-                                                    <div className="owner-accounts">
+                                                <div key={owner} className="owner-pool-card" style={{ marginBottom: "8px", padding: "12px" }}>
+                                                    <div className="owner-pool-header">
+                                                        {owner} <span className="owner-pool-count">{ids.length}</span>
+                                                    </div>
+                                                    <div className="owner-pool-list" style={{ maxHeight: "150px" }}>
                                                         {ids.map((id) => (
                                                             <div
                                                                 key={id}
@@ -399,9 +403,11 @@ export default function GroupManager() {
                                                     return acc;
                                                 }, {})
                                             ).sort(([a], [b]) => a.localeCompare(b)).map(([owner, ids]) => (
-                                                <div key={owner} className="owner-section">
-                                                    <div className="owner-header">{owner}</div>
-                                                    <div className="owner-accounts">
+                                                <div key={owner} className="owner-pool-card" style={{ marginBottom: "8px", padding: "12px" }}>
+                                                    <div className="owner-pool-header">
+                                                        {owner} <span className="owner-pool-count">{ids.length}</span>
+                                                    </div>
+                                                    <div className="owner-pool-list" style={{ maxHeight: "150px" }}>
                                                         {ids.map((id) => (
                                                             <div
                                                                 key={id}

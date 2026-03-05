@@ -1437,9 +1437,85 @@ body {
 }
 
 .avail-chips {
+  /* Using new owner-pool-grid instead */
+}
+
+/* ── Owner Pool Cards Layout ───────────────────────────── */
+.owner-pool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 20px;
+  align-items: start;
+  margin-top: 16px;
+}
+
+.owner-pool-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 16px;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 12px;
+  transition: border-color 0.2s;
+}
+
+.owner-pool-card:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.owner-pool-header {
+  text-align: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--white);
+  padding-bottom: 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
+  letter-spacing: 0.5px;
+}
+
+.owner-pool-count {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: var(--primary-color);
+  color: white;
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.owner-pool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  /* Exactly enough for ~5 accounts */
+  overflow-y: auto;
+  padding-right: 6px;
+  /* give scrollbar breathing room */
+}
+
+/* Custom Scrollbar for Pool List */
+.owner-pool-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.owner-pool-list::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+}
+
+.owner-pool-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.owner-pool-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
 }
 
 .avail-chip {
