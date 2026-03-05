@@ -22,9 +22,9 @@ function App() {
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <div className="brand-icon">⚖️</div>
+          <div className="brand-icon"><img src="/orca-logo.png" alt="Orca" style={{ width: 28, height: 28, borderRadius: 6 }} /></div>
           <div className="brand-text">
-            <h1>HedgeX</h1>
+            <h1>Orca</h1>
             <span>Trading System</span>
           </div>
         </div>
