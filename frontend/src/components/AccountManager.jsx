@@ -562,7 +562,6 @@ export default function AccountManager() {
                                                                         <div className="sub-header-cell">Balance</div>
                                                                         <div className="sub-header-cell">Buffer</div>
                                                                         <div className="sub-header-cell">Liq. Limit</div>
-                                                                        <div className="sub-header-cell">Peak</div>
                                                                         <div></div>{/* Actions */}
                                                                     </div>
                                                                     {[...cred.accounts]
@@ -598,9 +597,6 @@ export default function AccountManager() {
                                                                                     </span>
                                                                                     <span className="sub-compact-metric">
                                                                                         {acct.drawdown_limit > 0 ? `$${acct.drawdown_limit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
-                                                                                    </span>
-                                                                                    <span className="sub-compact-metric">
-                                                                                        {acct.peak_balance ? `$${acct.peak_balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
                                                                                     </span>
                                                                                     <div className="sub-actions-compact" onClick={(e) => e.stopPropagation()}>
                                                                                         <button className="icon-btn-xs" onClick={() => openEditSubAccount(acct)}>✏️</button>

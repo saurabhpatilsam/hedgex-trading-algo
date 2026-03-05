@@ -3576,7 +3576,7 @@ body {
 /* ── Compact Table Row Sub-Account Layout ──────────────── */
 .sub-acct-header {
   display: grid;
-  grid-template-columns: 24px 1fr 90px 90px 90px 90px 50px;
+  grid-template-columns: 24px 1fr 90px 90px 90px 50px;
   align-items: center;
   gap: 4px;
   padding: 6px 10px;
@@ -3600,7 +3600,7 @@ body {
 
 .sub-acct-compact {
   display: grid;
-  grid-template-columns: 24px 1fr 90px 90px 90px 90px 50px;
+  grid-template-columns: 24px 1fr 90px 90px 90px 50px;
   align-items: center;
   gap: 4px;
   padding: 6px 10px;
