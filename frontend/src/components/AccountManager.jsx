@@ -555,46 +555,61 @@ export default function AccountManager() {
                                                             {(!cred.accounts || cred.accounts.length === 0) ? (
                                                                 <div className="sub-empty-compact">No accounts</div>
                                                             ) : (
-                                                                [...cred.accounts]
-                                                                    .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
-                                                                    .map(acct => {
-                                                                        const isSelected = selectedAccounts.has(acct.id);
-                                                                        const hasDD = acct.drawdown_limit > 0;
-                                                                        const buffer = hasDD ? acct.balance - acct.drawdown_limit : null;
-                                                                        const bufferColor = !hasDD ? "var(--gray-600)"
-                                                                            : buffer < 0 ? "#ef4444"
-                                                                                : buffer < 500 ? "#ef4444"
-                                                                                    : buffer < 1000 ? "#f59e0b"
-                                                                                        : "#4ade80";
-                                                                        return (
-                                                                            <div
-                                                                                key={acct.id}
-                                                                                className={`sub-acct-compact ${isSelected ? "sub-acct-selected" : ""}`}
-                                                                                onClick={() => toggleSelect(acct.id)}
-                                                                            >
-                                                                                <label className="sub-acct-checkbox" onClick={(e) => e.stopPropagation()}>
-                                                                                    <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(acct.id)} />
-                                                                                </label>
-                                                                                <span className="sub-compact-name" title={acct.name}>{acct.name}</span>
-                                                                                <span className="sub-compact-metric" style={{ fontWeight: 700, color: "var(--gray-100)" }}>
-                                                                                    ${acct.balance ? acct.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}
-                                                                                </span>
-                                                                                <span className="sub-compact-metric" style={{ fontWeight: 700, color: bufferColor }}>
-                                                                                    {hasDD ? (buffer < 0 ? "BREACH" : `$${buffer.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`) : "—"}
-                                                                                </span>
-                                                                                <span className="sub-compact-metric">
-                                                                                    {acct.drawdown_limit > 0 ? `$${acct.drawdown_limit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
-                                                                                </span>
-                                                                                <span className="sub-compact-metric">
-                                                                                    {acct.peak_balance ? `$${acct.peak_balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
-                                                                                </span>
-                                                                                <div className="sub-actions-compact" onClick={(e) => e.stopPropagation()}>
-                                                                                    <button className="icon-btn-xs" onClick={() => openEditSubAccount(acct)}>✏️</button>
-                                                                                    <button className="icon-btn-xs danger" onClick={() => handleDeleteSubAccount(acct.id)}>✕</button>
+                                                                <>
+                                                                    <div className="sub-acct-header">
+                                                                        <div></div>{/* Checkbox */}
+                                                                        <div className="sub-header-cell left">Account Name</div>
+                                                                        <div className="sub-header-cell">Balance</div>
+                                                                        <div className="sub-header-cell">Buffer</div>
+                                                                        <div className="sub-header-cell">Liq. Limit</div>
+                                                                        <div className="sub-header-cell">Peak</div>
+                                                                        <div></div>{/* Actions */}
+                                                                    </div>
+                                                                    {[...cred.accounts]
+                                                                        .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+                                                                        .map(acct => {
+                                                                            const isSelected = selectedAccounts.has(acct.id);
+                                                                            const hasDD = acct.drawdown_limit > 0;
+                                                                            const buffer = hasDD ? acct.balance - acct.drawdown_limit : null;
+                                                                            const bufferColor = !hasDD ? "var(--gray-600)"
+                                                                                : buffer < 0 ? "#ef4444"
+                                                                                    : buffer < 500 ? "#ef4444"
+                                                                                        : buffer < 1000 ? "#f59e0b"
+                                                                                            : "#4ade80";
+                                                                            return (
+                                                                                <div
+                                                                                    key={acct.id}
+                                                                                    className={`sub-acct-compact ${isSelected ? "sub-acct-selected" : ""}`}
+                                                                                    onClick={() => toggleSelect(acct.id)}
+                                                                                >
+                                                                                    <label className="sub-acct-checkbox" onClick={(e) => e.stopPropagation()}>
+                                                                                        <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(acct.id)} />
+                                                                                    </label>
+                                                                                    <span className="sub-compact-name" title={acct.name}>
+                                                                                        {acct.name && acct.name.length > 8
+                                                                                            ? `${acct.name.substring(0, 4)}...${acct.name.substring(acct.name.length - 4)}`
+                                                                                            : acct.name}
+                                                                                    </span>
+                                                                                    <span className="sub-compact-metric" style={{ fontWeight: 700, color: "var(--gray-100)" }}>
+                                                                                        ${acct.balance ? acct.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}
+                                                                                    </span>
+                                                                                    <span className="sub-compact-metric" style={{ fontWeight: 700, color: bufferColor }}>
+                                                                                        {hasDD ? (buffer < 0 ? "BREACH" : `$${buffer.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`) : "—"}
+                                                                                    </span>
+                                                                                    <span className="sub-compact-metric">
+                                                                                        {acct.drawdown_limit > 0 ? `$${acct.drawdown_limit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                                                                                    </span>
+                                                                                    <span className="sub-compact-metric">
+                                                                                        {acct.peak_balance ? `$${acct.peak_balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                                                                                    </span>
+                                                                                    <div className="sub-actions-compact" onClick={(e) => e.stopPropagation()}>
+                                                                                        <button className="icon-btn-xs" onClick={() => openEditSubAccount(acct)}>✏️</button>
+                                                                                        <button className="icon-btn-xs danger" onClick={() => handleDeleteSubAccount(acct.id)}>✕</button>
+                                                                                    </div>
                                                                                 </div>
-                                                                            </div>
-                                                                        );
-                                                                    })
+                                                                            );
+                                                                        })}
+                                                                </>
                                                             )}
                                                         </div>
                                                     </div>
