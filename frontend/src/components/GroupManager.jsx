@@ -252,17 +252,30 @@ export default function GroupManager() {
                             No accounts yet. Go to the Accounts tab to create some.
                         </div>
                     )}
-                    {activeAccounts.map((a) => (
-                        <div
-                            key={a.id}
-                            className="avail-chip"
-                            draggable
-                            onDragStart={(e) => handleDragStart(e, a.id)}
-                        >
-                            <span className="avail-name">{a.name}</span>
-                            {a.owner && <span className="owner-tag">{a.owner}</span>}
-                            <span className="avail-broker">{a.broker}</span>
-                            <span className="avail-drag">⠿</span>
+                    {Object.entries(
+                        activeAccounts.reduce((acc, account) => {
+                            const owner = account.owner || 'Unassigned';
+                            if (!acc[owner]) acc[owner] = [];
+                            acc[owner].push(account);
+                            return acc;
+                        }, {})
+                    ).sort(([a], [b]) => a.localeCompare(b)).map(([owner, accounts]) => (
+                        <div key={owner} className="owner-section">
+                            <div className="owner-header">{owner}</div>
+                            <div className="owner-accounts">
+                                {accounts.map((a) => (
+                                    <div
+                                        key={a.id}
+                                        className="avail-chip"
+                                        draggable
+                                        onDragStart={(e) => handleDragStart(e, a.id)}
+                                    >
+                                        <span className="avail-name">{a.name}</span>
+                                        <span className="avail-broker">{a.broker}</span>
+                                        <span className="avail-drag">⠿</span>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     ))}
                 </div>
@@ -338,16 +351,29 @@ export default function GroupManager() {
                                                 POT-L ({state.potL.length})
                                             </div>
                                             {state.potL.length === 0 && <div className="group-pot-empty">Drop accounts here</div>}
-                                            {state.potL.map((id) => (
-                                                <div
-                                                    key={id}
-                                                    className="group-acct-chip"
-                                                    draggable
-                                                    onDragStart={(e) => handleDragStart(e, id)}
-                                                >
-                                                    <span>{getAccountName(id)}</span>
-                                                    {getAccount(id)?.owner && <span className="owner-tag">{getAccount(id).owner}</span>}
-                                                    <button className="chip-btn chip-btn-del" onClick={() => handleRemoveFromGroup(group.id, id)}>✕</button>
+                                            {Object.entries(
+                                                state.potL.reduce((acc, id) => {
+                                                    const owner = getAccount(id)?.owner || 'Unassigned';
+                                                    if (!acc[owner]) acc[owner] = [];
+                                                    acc[owner].push(id);
+                                                    return acc;
+                                                }, {})
+                                            ).sort(([a], [b]) => a.localeCompare(b)).map(([owner, ids]) => (
+                                                <div key={owner} className="owner-section">
+                                                    <div className="owner-header">{owner}</div>
+                                                    <div className="owner-accounts">
+                                                        {ids.map((id) => (
+                                                            <div
+                                                                key={id}
+                                                                className="group-acct-chip"
+                                                                draggable
+                                                                onDragStart={(e) => handleDragStart(e, id)}
+                                                            >
+                                                                <span>{getAccountName(id)}</span>
+                                                                <button className="chip-btn chip-btn-del" onClick={() => handleRemoveFromGroup(group.id, id)}>✕</button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
                                                 </div>
                                             ))}
                                         </div>
@@ -365,16 +391,29 @@ export default function GroupManager() {
                                                 POT-S ({state.potS.length})
                                             </div>
                                             {state.potS.length === 0 && <div className="group-pot-empty">Drop accounts here</div>}
-                                            {state.potS.map((id) => (
-                                                <div
-                                                    key={id}
-                                                    className="group-acct-chip"
-                                                    draggable
-                                                    onDragStart={(e) => handleDragStart(e, id)}
-                                                >
-                                                    <span>{getAccountName(id)}</span>
-                                                    {getAccount(id)?.owner && <span className="owner-tag">{getAccount(id).owner}</span>}
-                                                    <button className="chip-btn chip-btn-del" onClick={() => handleRemoveFromGroup(group.id, id)}>✕</button>
+                                            {Object.entries(
+                                                state.potS.reduce((acc, id) => {
+                                                    const owner = getAccount(id)?.owner || 'Unassigned';
+                                                    if (!acc[owner]) acc[owner] = [];
+                                                    acc[owner].push(id);
+                                                    return acc;
+                                                }, {})
+                                            ).sort(([a], [b]) => a.localeCompare(b)).map(([owner, ids]) => (
+                                                <div key={owner} className="owner-section">
+                                                    <div className="owner-header">{owner}</div>
+                                                    <div className="owner-accounts">
+                                                        {ids.map((id) => (
+                                                            <div
+                                                                key={id}
+                                                                className="group-acct-chip"
+                                                                draggable
+                                                                onDragStart={(e) => handleDragStart(e, id)}
+                                                            >
+                                                                <span>{getAccountName(id)}</span>
+                                                                <button className="chip-btn chip-btn-del" onClick={() => handleRemoveFromGroup(group.id, id)}>✕</button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
                                                 </div>
                                             ))}
                                         </div>

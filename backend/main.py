@@ -69,8 +69,8 @@ app.include_router(market_data.router)    # Market data collection & backtesting
 @app.get("/")
 def root():
     return {
-        "message": "Automated Trading System API",
-        "version": "3.1.0",
+        "message": "Orca Automated Trading System API",
+        "version": "3.1.1",
         "docs": "/docs",
         "trading_api": "/api/trading",
         "market_data_api": "/api/market-data",
