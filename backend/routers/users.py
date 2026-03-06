@@ -17,7 +17,7 @@ def _shorten_error(error: str) -> str:
         return error
     e = error.lower()
     if "tradingview" in e and "entitled" in e:
-        return "Turn on TradingView Add-On in Apex Client Dashboard"
+        return "Login blocked: Account failed, inactive, or missing TV Add-On"
     if "incorrect username or password" in e:
         return "Invalid credentials — check login ID & password"
     if "timeout" in e or "timed out" in e:
