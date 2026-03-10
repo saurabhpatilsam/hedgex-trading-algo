@@ -83,6 +83,7 @@ class UserResponse(BaseModel):
     name: str
     static_ip: Optional[str] = None
     proxy_region: Optional[str] = None
+    ip_allocation_error: Optional[str] = None
     created_at: datetime
     credentials: List[BrokerCredentialResponse] = []
 

@@ -83,6 +83,7 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
         except Exception as e:
             import logging
             logging.getLogger("users").error(f"Azure IP creation failed: {e}")
+            user.ip_allocation_error = str(e)
             # User is created but IP assignment failed — can be retried
 
     return user

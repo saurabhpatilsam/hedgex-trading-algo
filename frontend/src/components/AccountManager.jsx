@@ -167,11 +167,15 @@ export default function AccountManager() {
         if (!newUserName.trim()) return;
         clearAlerts();
         try {
-            await usersApi.create({ name: newUserName.trim(), ip_region: newUserRegion });
+            const res = await usersApi.create({ name: newUserName.trim(), ip_region: newUserRegion });
             setNewUserName("");
             setNewUserRegion("india");
             setShowAddUser(false);
-            setSuccess(`User "${newUserName.trim()}" created with ${newUserRegion.toUpperCase()} IP`);
+            if (res.ip_allocation_error) {
+                setError(`User created successfully, but Azure IP allocation failed: ${res.ip_allocation_error}`);
+            } else {
+                setSuccess(`User "${res.name}" created and assigned an Azure IP`);
+            }
             load();
         } catch (err) { setError(err.message); }
     };
