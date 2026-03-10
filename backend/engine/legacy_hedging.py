@@ -12,7 +12,6 @@ from models import (
     GroupOrder,
     Instrument,
     OrderDirection,
-    PotType,
     StrategyStatus,
     Trade,
     TradeSide,
@@ -52,20 +51,25 @@ class HedgingEngine:
             .all()
         )
 
-        pot_l = [m for m in memberships if m.pot == PotType.POT_L]
-        pot_s = [m for m in memberships if m.pot == PotType.POT_S]
+        primary_pot = group.pods[0] if group.pods else "Default"
+        hedge_pot = group.pods[1] if group.pods and len(group.pods) > 1 else None
+
+        pot_l = [m for m in memberships if m.pot == primary_pot]
+        pot_s = [m for m in memberships if m.pot == hedge_pot] if hedge_pot else []
 
         errors = []
         if len(pot_l) == 0:
-            errors.append("No active POT-L accounts in this group")
-        if len(pot_s) == 0:
-            errors.append("No active POT-S accounts in this group")
+            errors.append(f"No active accounts in primary pot '{primary_pot}'")
+        
+        # If there is a hedge pot defined, we expect it to have accounts (for standard HedgeX)
+        if hedge_pot and len(pot_s) == 0:
+            errors.append(f"No active accounts in hedge pot '{hedge_pot}'")
 
         total = len(pot_l) + len(pot_s)
-        if total > 0 and total % 2 != 0:
+        if hedge_pot and total > 0 and total % 2 != 0:
             errors.append(
-                f"Total accounts ({total}) must be even. "
-                f"POT-L: {len(pot_l)}, POT-S: {len(pot_s)}"
+                f"Total accounts ({total}) must be even when hedging. "
+                f"{primary_pot}: {len(pot_l)}, {hedge_pot}: {len(pot_s)}"
             )
 
         return {
@@ -180,8 +184,11 @@ class HedgingEngine:
             .all()
         )
 
-        pot_l_accounts = [m.account for m in memberships if m.pot == PotType.POT_L]
-        pot_s_accounts = [m.account for m in memberships if m.pot == PotType.POT_S]
+        primary_pot = group.pods[0] if group.pods else "Default"
+        hedge_pot = group.pods[1] if group.pods and len(group.pods) > 1 else None
+
+        pot_l_accounts = [m.account for m in memberships if m.pot == primary_pot]
+        pot_s_accounts = [m.account for m in memberships if m.pot == hedge_pot] if hedge_pot else []
 
         # Determine sides based on direction
         if order.direction == OrderDirection.LONG:

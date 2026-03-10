@@ -9,6 +9,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -16,13 +17,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from database import Base
-
-
-class PotType(str, enum.Enum):
-    POT_L = "POT-L"
-    POT_S = "POT-S"
-    UNASSIGNED = "UNASSIGNED"
-
 
 class InstrumentType(str, enum.Enum):
     FUTURES = "FUTURES"
@@ -95,6 +89,7 @@ class Group(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False, unique=True)
+    pods = Column(JSON, default=list)  # ["Default"] or ["Long Pod", "Short Pod"]
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -132,7 +127,7 @@ class GroupMembership(Base):
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
-    pot = Column(Enum(PotType), nullable=False)
+    pot = Column(String, nullable=False)
 
     group = relationship("Group", back_populates="memberships")
     account = relationship("Account", back_populates="memberships")

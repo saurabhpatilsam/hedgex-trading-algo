@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
-from models import Account, Group, GroupMembership, PotType
+from models import Account, Group, GroupMembership
 from schemas import (
     GroupCreate,
     GroupMembershipCreate,
@@ -22,6 +22,7 @@ def _group_response(group: Group) -> dict:
     return GroupResponse(
         id=group.id,
         name=group.name,
+        pods=group.pods or [],
         is_active=group.is_active,
         created_at=group.created_at,
         members=members,
@@ -58,7 +59,13 @@ def create_group(payload: GroupCreate, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=400, detail=f"Group '{payload.name}' already exists"
         )
-    group = Group(name=payload.name)
+    
+    # Ensure unique pods and strip whitespace
+    pods = list(dict.fromkeys(p.strip() for p in payload.pods if p.strip()))
+    if not pods:
+        pods = ["Default"]
+
+    group = Group(name=payload.name, pods=pods)
     db.add(group)
     db.commit()
     db.refresh(group)
@@ -110,6 +117,9 @@ def add_member(
     )
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+        
+    if payload.pot not in (group.pods or []):
+        raise HTTPException(status_code=400, detail=f"Invalid pot '{payload.pot}'. Allowed: {group.pods}")
 
     # ── Same-user validation ──────────────────────────────────
     # Get the user who owns this account
@@ -122,7 +132,7 @@ def add_member(
             .options(joinedload(GroupMembership.account).joinedload(Account.credential))
             .filter(
                 GroupMembership.group_id == group_id,
-                GroupMembership.pot == PotType(payload.pot),
+                GroupMembership.pot == payload.pot,
                 GroupMembership.account_id != payload.account_id,  # exclude self (for updates)
             )
             .all()
@@ -146,13 +156,13 @@ def add_member(
     )
     if existing:
         # Update the pot assignment
-        existing.pot = PotType(payload.pot)
+        existing.pot = payload.pot
         db.commit()
     else:
         membership = GroupMembership(
             group_id=group_id,
             account_id=payload.account_id,
-            pot=PotType(payload.pot),
+            pot=payload.pot,
         )
         db.add(membership)
         db.commit()

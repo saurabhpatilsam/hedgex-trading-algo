@@ -6,6 +6,9 @@ export default function GroupManager() {
     const [accounts, setAccounts] = useState([]);
     const [showCreate, setShowCreate] = useState(false);
     const [newName, setNewName] = useState("");
+    const [useTwoPods, setUseTwoPods] = useState(false);
+    const [pod1Name, setPod1Name] = useState("Primary Pod");
+    const [pod2Name, setPod2Name] = useState("Hedge Pod");
     const [editingId, setEditingId] = useState(null);
     const [editName, setEditName] = useState("");
     const [expandedGroup, setExpandedGroup] = useState(null);
@@ -32,22 +35,35 @@ export default function GroupManager() {
     // Get what's currently in a group (from server data + pending)
     const getGroupState = (group) => {
         if (pending[group.id]) return pending[group.id];
+        const state = {};
+        const pods = group.pods || ["Default"];
+        pods.forEach(p => state[p] = []);
         const members = group.members || [];
-        return {
-            potL: members.filter((m) => m.pot === "POT-L").map((m) => m.account_id),
-            potS: members.filter((m) => m.pot === "POT-S").map((m) => m.account_id),
-        };
+        members.forEach(m => {
+            if (state[m.pot]) state[m.pot].push(m.account_id);
+            else state[m.pot] = [m.account_id]; // Fallback
+        });
+        return state;
     };
 
     // Check if a group has unsaved changes
     const hasChanges = (group) => {
         if (!pending[group.id]) return false;
-        const members = group.members || [];
-        const serverL = members.filter((m) => m.pot === "POT-L").map((m) => m.account_id).sort().join(",");
-        const serverS = members.filter((m) => m.pot === "POT-S").map((m) => m.account_id).sort().join(",");
-        const pendL = [...pending[group.id].potL].sort().join(",");
-        const pendS = [...pending[group.id].potS].sort().join(",");
-        return serverL !== pendL || serverS !== pendS;
+
+        const serverState = {};
+        const pods = group.pods || ["Default"];
+        pods.forEach(p => serverState[p] = []);
+        (group.members || []).forEach(m => {
+            if (serverState[m.pot]) serverState[m.pot].push(m.account_id);
+        });
+
+        const pendState = pending[group.id];
+        for (const p of pods) {
+            const serverList = [...(serverState[p] || [])].sort().join(",");
+            const pendList = [...(pendState[p] || [])].sort().join(",");
+            if (serverList !== pendList) return true;
+        }
+        return false;
     };
 
     // Sort groups: expanded/editing group comes first
@@ -78,11 +94,11 @@ export default function GroupManager() {
         if (!droppedAccount) return;
 
         const state = getGroupState(groups.find((g) => g.id === groupId));
-        const targetPot = pot === "POT-L" ? state.potL : state.potS;
+        const targetPot = state[pot];
 
         // Same-user validation: check if an account from the same user is already in this pot
         const droppedUserId = droppedAccount.user_id;
-        if (droppedUserId) {
+        if (droppedUserId && targetPot) {
             const existingFromSameUser = targetPot.find((id) => {
                 if (id === accountId) return false; // skip self
                 const acct = getAccount(id);
@@ -96,15 +112,14 @@ export default function GroupManager() {
         }
 
         setError("");
-        const newState = {
-            potL: state.potL.filter((id) => id !== accountId),
-            potS: state.potS.filter((id) => id !== accountId),
-        };
+        const pods = groups.find(g => g.id === groupId).pods || ["Default"];
+        const newState = {};
+        pods.forEach(p => {
+            newState[p] = state[p] ? state[p].filter((id) => id !== accountId) : [];
+        });
 
-        if (pot === "POT-L") {
-            newState.potL = [...newState.potL, accountId];
-        } else {
-            newState.potS = [...newState.potS, accountId];
+        if (newState[pot]) {
+            newState[pot] = [...newState[pot], accountId];
         }
 
         setPending({ ...pending, [groupId]: newState });
@@ -113,12 +128,14 @@ export default function GroupManager() {
     const handleRemoveFromGroup = (groupId, accountId) => {
         const group = groups.find((g) => g.id === groupId);
         const state = getGroupState(group);
+        const pods = group.pods || ["Default"];
+        const newState = {};
+        pods.forEach(p => {
+            newState[p] = state[p] ? state[p].filter((id) => id !== accountId) : [];
+        });
         setPending({
             ...pending,
-            [groupId]: {
-                potL: state.potL.filter((id) => id !== accountId),
-                potS: state.potS.filter((id) => id !== accountId),
-            },
+            [groupId]: newState,
         });
     };
 
@@ -138,14 +155,11 @@ export default function GroupManager() {
                 await groupsApi.removeMember(groupId, m.account_id);
             }
 
-            // Add POT-L
-            for (const accountId of state.potL) {
-                await groupsApi.addMember(groupId, accountId, "POT-L");
-            }
-
-            // Add POT-S
-            for (const accountId of state.potS) {
-                await groupsApi.addMember(groupId, accountId, "POT-S");
+            // Add to pots
+            for (const podName of Object.keys(state)) {
+                for (const accountId of state[podName]) {
+                    await groupsApi.addMember(groupId, accountId, podName);
+                }
             }
 
             // Clear pending and reload
@@ -170,8 +184,15 @@ export default function GroupManager() {
         e.preventDefault();
         if (!newName.trim()) return;
         try {
-            await groupsApi.create({ name: newName.trim() });
+            const pods = useTwoPods
+                ? [pod1Name.trim() || "Primary", pod2Name.trim() || "Hedge"]
+                : ["Default"];
+
+            await groupsApi.create({ name: newName.trim(), pods });
             setNewName("");
+            setUseTwoPods(false);
+            setPod1Name("Primary Pod");
+            setPod2Name("Hedge Pod");
             setShowCreate(false);
             load();
         } catch (err) {
@@ -224,16 +245,42 @@ export default function GroupManager() {
 
             {/* Create Group Inline */}
             {showCreate && (
-                <form onSubmit={handleCreate} className="create-group-bar">
-                    <input
-                        type="text"
-                        value={newName}
-                        onChange={(e) => setNewName(e.target.value)}
-                        placeholder="Group name (e.g. Saurabh)"
-                        autoFocus
-                    />
-                    <button type="submit" className="btn btn-primary btn-sm">Create</button>
-                    <button type="button" className="btn btn-cancel btn-sm" onClick={() => setShowCreate(false)}>Cancel</button>
+                <form onSubmit={handleCreate} className="create-group-bar" style={{ display: 'flex', flexDirection: 'column', gap: '16px', alignItems: 'flex-start' }}>
+                    <div style={{ display: 'flex', gap: '12px', width: '100%' }}>
+                        <input
+                            type="text"
+                            value={newName}
+                            onChange={(e) => setNewName(e.target.value)}
+                            placeholder="Group name (e.g. Saurabh)"
+                            style={{ flex: 1 }}
+                            autoFocus
+                        />
+                        <button type="submit" className="btn btn-primary btn-sm">Create Group</button>
+                        <button type="button" className="btn btn-cancel btn-sm" onClick={() => setShowCreate(false)}>Cancel</button>
+                    </div>
+
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '14px', color: 'var(--text-secondary)' }}>
+                        <input
+                            type="checkbox"
+                            checked={useTwoPods}
+                            onChange={(e) => setUseTwoPods(e.target.checked)}
+                            style={{ accentColor: 'var(--accent-primary)' }}
+                        />
+                        Enable Dual-Pod Mode (Long & Short Segregation)
+                    </label>
+
+                    {useTwoPods && (
+                        <div style={{ display: 'flex', gap: '12px', width: '100%', padding: '12px', background: 'var(--bg-1)', borderRadius: '8px', border: '1px solid var(--glass-border)' }}>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ display: 'block', fontSize: '12px', marginBottom: '4px', color: 'var(--accent-success)' }}>Pod 1 Name</label>
+                                <input type="text" value={pod1Name} onChange={e => setPod1Name(e.target.value)} placeholder="e.g. Primary Side" style={{ width: '100%' }} />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ display: 'block', fontSize: '12px', marginBottom: '4px', color: 'var(--accent-danger)' }}>Pod 2 Name</label>
+                                <input type="text" value={pod2Name} onChange={e => setPod2Name(e.target.value)} placeholder="e.g. Hedge Side" style={{ width: '100%' }} />
+                            </div>
+                        </div>
+                    )}
                 </form>
             )}
 
@@ -245,7 +292,7 @@ export default function GroupManager() {
 
             {/* ── Account Pool (always at top) ──────────── */}
             <div className="avail-accounts-section">
-                <h4>All Accounts <small>(drag into a group's POT-L or POT-S zone below)</small></h4>
+                <h4>All Accounts <small>(drag into a group's pod zone below)</small></h4>
                 <div className="owner-pool-grid">
                     {activeAccounts.length === 0 && (
                         <div className="zone-empty" style={{ padding: "12px", gridColumn: "1 / -1" }}>
@@ -296,7 +343,11 @@ export default function GroupManager() {
                     const isExpanded = expandedGroup === group.id;
                     const changed = hasChanges(group);
                     const isSaving = saving === group.id;
-                    const potMismatch = state.potL.length !== state.potS.length && (state.potL.length > 0 || state.potS.length > 0);
+                    const p1 = group.pods?.[0] || "Default";
+                    const p2 = group.pods?.[1];
+                    const potMismatch = p2
+                        ? (state[p1]?.length || 0) !== (state[p2]?.length || 0) && ((state[p1]?.length || 0) > 0 || (state[p2]?.length || 0) > 0)
+                        : false;
 
                     return (
                         <div
@@ -320,8 +371,11 @@ export default function GroupManager() {
                                         <h3 className="group-name">{group.name}</h3>
                                     )}
                                     <div className="group-badges">
-                                        <span className="badge badge-long">{state.potL.length} L</span>
-                                        <span className="badge badge-short">{state.potS.length} S</span>
+                                        {(group.pods || ["Default"]).map((pName, idx) => (
+                                            <span key={pName} className={`badge ${idx === 0 ? 'badge-long' : 'badge-short'}`}>
+                                                {state[pName]?.length || 0} {pName.substring(0, 1)}
+                                            </span>
+                                        ))}
                                         {changed && <span className="badge badge-unsaved">unsaved</span>}
                                     </div>
                                 </div>
@@ -341,101 +395,69 @@ export default function GroupManager() {
 
                             {isExpanded && (
                                 <div className="group-card-body">
-                                    <div className="group-pots-row">
-                                        {/* POT-L drop zone */}
-                                        <div
-                                            className="group-pot drop-target"
-                                            onDragOver={handleDragOver}
-                                            onDrop={(e) => handleDropToPot(e, group.id, "POT-L")}
-                                        >
-                                            <div className="group-pot-label">
-                                                <span className="pot-dot dot-long" />
-                                                POT-L ({state.potL.length})
-                                            </div>
-                                            {state.potL.length === 0 && <div className="group-pot-empty">Drop accounts here</div>}
-                                            {Object.entries(
-                                                state.potL.reduce((acc, id) => {
-                                                    const owner = getAccount(id)?.owner || 'Unassigned';
-                                                    if (!acc[owner]) acc[owner] = [];
-                                                    acc[owner].push(id);
-                                                    return acc;
-                                                }, {})
-                                            ).sort(([a], [b]) => a.localeCompare(b)).map(([owner, ids]) => (
-                                                <div key={owner} className="owner-pool-card" style={{ marginBottom: "8px", padding: "12px" }}>
-                                                    <div className="owner-pool-header">
-                                                        {owner} <span className="owner-pool-count">{ids.length}</span>
-                                                    </div>
-                                                    <div className="owner-pool-list" style={{ maxHeight: "150px" }}>
-                                                        {ids.map((id) => (
-                                                            <div
-                                                                key={id}
-                                                                className="group-acct-chip"
-                                                                draggable
-                                                                onDragStart={(e) => handleDragStart(e, id)}
-                                                            >
-                                                                <span>{getAccountName(id)}</span>
-                                                                <button className="chip-btn chip-btn-del" onClick={() => handleRemoveFromGroup(group.id, id)}>✕</button>
+                                    <div className="group-pots-row" style={{ overflowX: 'auto' }}>
+                                        {/* Dynamic Pod Rendering */}
+                                        {(group.pods || ["Default"]).map((podName, idx) => {
+                                            const isShort = idx > 0;
+                                            const potData = state[podName] || [];
+                                            return (
+                                                <div key={podName} style={{ display: 'flex', flex: 1, minWidth: '300px', gap: '16px' }}>
+                                                    {idx > 0 && <div className="group-pot-divider" style={{ marginRight: '16px' }} />}
+                                                    <div
+                                                        className="group-pot drop-target"
+                                                        onDragOver={handleDragOver}
+                                                        onDrop={(e) => handleDropToPot(e, group.id, podName)}
+                                                        style={{ flex: 1 }}
+                                                    >
+                                                        <div className="group-pot-label">
+                                                            <span className={`pot-dot ${isShort ? 'dot-short' : 'dot-long'}`} />
+                                                            {podName} ({potData.length})
+                                                        </div>
+                                                        {potData.length === 0 && <div className="group-pot-empty">Drop accounts here</div>}
+                                                        {Object.entries(
+                                                            potData.reduce((acc, id) => {
+                                                                const owner = getAccount(id)?.owner || 'Unassigned';
+                                                                if (!acc[owner]) acc[owner] = [];
+                                                                acc[owner].push(id);
+                                                                return acc;
+                                                            }, {})
+                                                        ).sort(([a], [b]) => a.localeCompare(b)).map(([owner, ids]) => (
+                                                            <div key={owner} className="owner-pool-card" style={{ marginBottom: "8px", padding: "12px" }}>
+                                                                <div className="owner-pool-header">
+                                                                    {owner} <span className="owner-pool-count">{ids.length}</span>
+                                                                </div>
+                                                                <div className="owner-pool-list" style={{ maxHeight: "150px" }}>
+                                                                    {ids.map((id) => (
+                                                                        <div
+                                                                            key={id}
+                                                                            className="group-acct-chip"
+                                                                            draggable
+                                                                            onDragStart={(e) => handleDragStart(e, id)}
+                                                                        >
+                                                                            <span>{getAccountName(id)}</span>
+                                                                            <button className="chip-btn chip-btn-del" onClick={() => handleRemoveFromGroup(group.id, id)}>✕</button>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
                                                             </div>
                                                         ))}
                                                     </div>
                                                 </div>
-                                            ))}
-                                        </div>
-
-                                        <div className="group-pot-divider" />
-
-                                        {/* POT-S drop zone */}
-                                        <div
-                                            className="group-pot drop-target"
-                                            onDragOver={handleDragOver}
-                                            onDrop={(e) => handleDropToPot(e, group.id, "POT-S")}
-                                        >
-                                            <div className="group-pot-label">
-                                                <span className="pot-dot dot-short" />
-                                                POT-S ({state.potS.length})
-                                            </div>
-                                            {state.potS.length === 0 && <div className="group-pot-empty">Drop accounts here</div>}
-                                            {Object.entries(
-                                                state.potS.reduce((acc, id) => {
-                                                    const owner = getAccount(id)?.owner || 'Unassigned';
-                                                    if (!acc[owner]) acc[owner] = [];
-                                                    acc[owner].push(id);
-                                                    return acc;
-                                                }, {})
-                                            ).sort(([a], [b]) => a.localeCompare(b)).map(([owner, ids]) => (
-                                                <div key={owner} className="owner-pool-card" style={{ marginBottom: "8px", padding: "12px" }}>
-                                                    <div className="owner-pool-header">
-                                                        {owner} <span className="owner-pool-count">{ids.length}</span>
-                                                    </div>
-                                                    <div className="owner-pool-list" style={{ maxHeight: "150px" }}>
-                                                        {ids.map((id) => (
-                                                            <div
-                                                                key={id}
-                                                                className="group-acct-chip"
-                                                                draggable
-                                                                onDragStart={(e) => handleDragStart(e, id)}
-                                                            >
-                                                                <span>{getAccountName(id)}</span>
-                                                                <button className="chip-btn chip-btn-del" onClick={() => handleRemoveFromGroup(group.id, id)}>✕</button>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
+                                            );
+                                        })}
                                     </div>
 
-                                    {/* Pot mismatch warning */}
-                                    {potMismatch && (
+                                    {/* Pot mismatch warning (only applies to dual-pod strategies) */}
+                                    {potMismatch && (group.pods?.length > 1) && (
                                         <div style={{
                                             display: "flex", alignItems: "center", gap: "8px",
-                                            padding: "8px 14px", marginTop: "8px",
+                                            padding: "8px 14px", marginTop: "16px",
                                             background: "rgba(250, 204, 21, 0.08)",
                                             border: "1px solid rgba(250, 204, 21, 0.25)",
                                             borderRadius: "6px", fontSize: "12px",
                                             color: "#facc15"
                                         }}>
-                                            ⚠️ POT-L and POT-S must have equal accounts. Currently: {state.potL.length} in POT-L, {state.potS.length} in POT-S.
+                                            ⚠️ Dual-pod groups work best when accounts are evenly matched. Currently unbalanced.
                                         </div>
                                     )}
 
@@ -446,8 +468,8 @@ export default function GroupManager() {
                                                 <button
                                                     className="btn btn-primary btn-sm"
                                                     onClick={() => handleSave(group.id)}
-                                                    disabled={isSaving || potMismatch}
-                                                    title={potMismatch ? "Balance POT-L and POT-S before saving" : ""}
+                                                    disabled={isSaving}
+                                                    title={potMismatch ? "Dual-pod groups balance recommended" : ""}
                                                 >
                                                     {isSaving ? "Saving…" : "💾 Save Group"}
                                                 </button>

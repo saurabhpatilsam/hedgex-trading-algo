@@ -149,10 +149,12 @@ class GroupMembershipResponse(BaseModel):
 
 class GroupCreate(BaseModel):
     name: str
+    pods: List[str] = ["Default"]
 
 
 class GroupUpdate(BaseModel):
     name: Optional[str] = None
+    pods: Optional[List[str]] = None
     is_active: Optional[bool] = None
 
 
@@ -160,6 +162,7 @@ class GroupResponse(BaseModel):
     id: int
     name: str
     is_active: bool
+    pods: List[str] = []
     created_at: datetime
     members: List[GroupMembershipResponse] = []
 

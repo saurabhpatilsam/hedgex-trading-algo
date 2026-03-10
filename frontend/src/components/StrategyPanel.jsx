@@ -13,6 +13,7 @@ export default function StrategyPanel() {
     const [selectedOrderId, setSelectedOrderId] = useState(null);
     const [linkPtSl, setLinkPtSl] = useState(true);
     const [executing, setExecuting] = useState({}); // { orderId: true } while placing
+    const [activeTab, setActiveTab] = useState("hedgex");
 
     // Instrument inline add
     const [showAddInst, setShowAddInst] = useState(false);
@@ -239,8 +240,11 @@ export default function StrategyPanel() {
         const isExecuting = executing[order.id];
 
         const group = groups.find((g) => g.id === order.group_id);
-        const longAccounts = (group?.members || []).filter(m => m.side === "LONG");
-        const shortAccounts = (group?.members || []).filter(m => m.side === "SHORT");
+        const primaryPodName = group?.pods?.[0] || "Primary";
+        const hedgePodName = group?.pods?.[1];
+
+        const primaryAccounts = (group?.members || []).filter(m => m.pot === primaryPodName);
+        const hedgeAccounts = hedgePodName ? (group?.members || []).filter(m => m.pot === hedgePodName) : [];
         const instrument = getInstrument(order.instrument_id);
 
         const isPrimaryLong = order.direction === "LONG";
@@ -309,18 +313,18 @@ export default function StrategyPanel() {
                 {/* Strategy Details Layout */}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', marginTop: '16px', padding: '16px', background: 'rgba(0,0,0,0.15)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
 
-                    {/* LONG SIDE INFO */}
+                    {/* PRIMARY SIDE INFO */}
                     <div style={{ flex: '1 1 300px', padding: '12px', background: 'rgba(34, 197, 94, 0.05)', borderLeft: '3px solid #22c55e', borderRadius: '6px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '8px' }}>
-                            <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#22c55e', textTransform: 'uppercase', letterSpacing: '0.5px' }}>📈 Long Side {isPrimaryLong ? "(Primary)" : "(Hedge)"}</span>
+                            <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#22c55e', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{isPrimaryLong ? '📈' : '📉'} Primary Side ({primaryPodName})</span>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             <div style={{ fontSize: '13px' }}>
                                 <span style={{ color: 'var(--gray-400)', marginRight: '8px' }}>Accounts:</span>
-                                {longAccounts.length > 0 ? (
+                                {primaryAccounts.length > 0 ? (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
-                                        {longAccounts.map(a => (
-                                            <span key={a.id} style={{ color: 'var(--gray-200)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '4px', display: 'inline-block', width: 'fit-content' }}>
+                                        {primaryAccounts.map(a => (
+                                            <span key={a.account_id} style={{ color: 'var(--gray-200)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '4px', display: 'inline-block', width: 'fit-content' }}>
                                                 👤 {a.account_name}
                                             </span>
                                         ))}
@@ -332,48 +336,50 @@ export default function StrategyPanel() {
                             <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }}>
                                 <div>
                                     <span style={{ color: 'var(--gray-400)', fontSize: '12px', display: 'block', marginBottom: '2px' }}>Take Profit</span>
-                                    <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '14px', background: 'rgba(34,197,94,0.1)', padding: '2px 8px', borderRadius: '4px' }}>+{longTp} ticks</span>
+                                    <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '14px', background: 'rgba(34,197,94,0.1)', padding: '2px 8px', borderRadius: '4px' }}>+{p_tp} ticks</span>
                                 </div>
                                 <div>
                                     <span style={{ color: 'var(--gray-400)', fontSize: '12px', display: 'block', marginBottom: '2px' }}>Stop Loss</span>
-                                    <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '14px', background: 'rgba(239,68,68,0.1)', padding: '2px 8px', borderRadius: '4px' }}>-{longSl} ticks</span>
+                                    <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '14px', background: 'rgba(239,68,68,0.1)', padding: '2px 8px', borderRadius: '4px' }}>-{p_sl} ticks</span>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    {/* SHORT SIDE INFO */}
-                    <div style={{ flex: '1 1 300px', padding: '12px', background: 'rgba(239, 68, 68, 0.05)', borderLeft: '3px solid #ef4444', borderRadius: '6px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '8px' }}>
-                            <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.5px' }}>📉 Short Side {!isPrimaryLong ? "(Primary)" : "(Hedge)"}</span>
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            <div style={{ fontSize: '13px' }}>
-                                <span style={{ color: 'var(--gray-400)', marginRight: '8px' }}>Accounts:</span>
-                                {shortAccounts.length > 0 ? (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
-                                        {shortAccounts.map(a => (
-                                            <span key={a.id} style={{ color: 'var(--gray-200)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '4px', display: 'inline-block', width: 'fit-content' }}>
-                                                👤 {a.account_name}
-                                            </span>
-                                        ))}
+                    {/* HEDGE SIDE INFO */}
+                    {hedgePodName && (
+                        <div style={{ flex: '1 1 300px', padding: '12px', background: 'rgba(239, 68, 68, 0.05)', borderLeft: '3px solid #ef4444', borderRadius: '6px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '8px' }}>
+                                <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{!isPrimaryLong ? '📈' : '📉'} Hedge Side ({hedgePodName})</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                <div style={{ fontSize: '13px' }}>
+                                    <span style={{ color: 'var(--gray-400)', marginRight: '8px' }}>Accounts:</span>
+                                    {hedgeAccounts.length > 0 ? (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
+                                            {hedgeAccounts.map(a => (
+                                                <span key={a.account_id} style={{ color: 'var(--gray-200)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '4px', display: 'inline-block', width: 'fit-content' }}>
+                                                    👤 {a.account_name}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <span style={{ color: 'var(--gray-500)', fontStyle: 'italic' }}>None configured</span>
+                                    )}
+                                </div>
+                                <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }}>
+                                    <div>
+                                        <span style={{ color: 'var(--gray-400)', fontSize: '12px', display: 'block', marginBottom: '2px' }}>Take Profit</span>
+                                        <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '14px', background: 'rgba(34,197,94,0.1)', padding: '2px 8px', borderRadius: '4px' }}>+{s_tp} ticks</span>
                                     </div>
-                                ) : (
-                                    <span style={{ color: 'var(--gray-500)', fontStyle: 'italic' }}>None configured</span>
-                                )}
-                            </div>
-                            <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }}>
-                                <div>
-                                    <span style={{ color: 'var(--gray-400)', fontSize: '12px', display: 'block', marginBottom: '2px' }}>Take Profit</span>
-                                    <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '14px', background: 'rgba(34,197,94,0.1)', padding: '2px 8px', borderRadius: '4px' }}>+{shortTp} ticks</span>
-                                </div>
-                                <div>
-                                    <span style={{ color: 'var(--gray-400)', fontSize: '12px', display: 'block', marginBottom: '2px' }}>Stop Loss</span>
-                                    <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '14px', background: 'rgba(239,68,68,0.1)', padding: '2px 8px', borderRadius: '4px' }}>-{shortSl} ticks</span>
+                                    <div>
+                                        <span style={{ color: 'var(--gray-400)', fontSize: '12px', display: 'block', marginBottom: '2px' }}>Stop Loss</span>
+                                        <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '14px', background: 'rgba(239,68,68,0.1)', padding: '2px 8px', borderRadius: '4px' }}>-{s_sl} ticks</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
+                    )}
 
                 </div>
 
@@ -395,7 +401,50 @@ export default function StrategyPanel() {
             {error && <div className="error-banner">{error}</div>}
             {success && <div className="success-banner">{success}</div>}
 
-            {/* ── Instruments Section (inline) ─────────────── */}
+            {/* Tabs Row */}
+            <div style={{ display: 'flex', gap: '16px', borderBottom: '1px solid var(--glass-border)', marginBottom: '24px' }}>
+                <button
+                    style={{
+                        padding: '12px 24px',
+                        background: activeTab === 'hedgex' ? 'rgba(139, 92, 246, 0.1)' : 'transparent',
+                        color: activeTab === 'hedgex' ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                        borderBottom: activeTab === 'hedgex' ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                        borderTop: 'none', borderLeft: 'none', borderRight: 'none',
+                        cursor: 'pointer', fontSize: '15px', fontWeight: '600', transition: 'all 0.2s', outline: 'none'
+                    }}
+                    onClick={() => setActiveTab('hedgex')}
+                >
+                    HedgeX Master Strategy
+                </button>
+                <button
+                    style={{
+                        padding: '12px 24px',
+                        background: activeTab === 'coming_soon' ? 'rgba(139, 92, 246, 0.1)' : 'transparent',
+                        color: activeTab === 'coming_soon' ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                        borderBottom: activeTab === 'coming_soon' ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                        borderTop: 'none', borderLeft: 'none', borderRight: 'none',
+                        cursor: 'pointer', fontSize: '15px', fontWeight: '600', transition: 'all 0.2s', outline: 'none'
+                    }}
+                    onClick={() => setActiveTab('coming_soon')}
+                >
+                    Momentum Fade (Coming Soon)
+                </button>
+                <button
+                    style={{
+                        padding: '12px 24px',
+                        background: activeTab === 'orb' ? 'rgba(139, 92, 246, 0.1)' : 'transparent',
+                        color: activeTab === 'orb' ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                        borderBottom: activeTab === 'orb' ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                        borderTop: 'none', borderLeft: 'none', borderRight: 'none',
+                        cursor: 'pointer', fontSize: '15px', fontWeight: '600', transition: 'all 0.2s', outline: 'none'
+                    }}
+                    onClick={() => setActiveTab('orb')}
+                >
+                    Opening Range Breakout (Coming Soon)
+                </button>
+            </div>
+
+            {/* Instruments Section (inline, shared across all strategies) */}
             <div className="instruments-inline-section">
                 <div className="instruments-inline-header">
                     <h4>Instruments</h4>
@@ -453,16 +502,21 @@ export default function StrategyPanel() {
             </div>
 
             {/* Active Strategies */}
-            <div className="strat-section">
-                <h3 className="section-title">Active ({activeOrders.length})</h3>
-                {activeOrders.length === 0 && (
-                    <div className="zone-empty">No active strategies. Create one to get started.</div>
-                )}
-                {activeOrders.map(renderOrderCard)}
-            </div>
+            {activeTab === 'hedgex' && (
+                <div className="strat-section">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <h3 className="section-title">Active ({activeOrders.length})</h3>
+                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>HedgeX executes synchronized dual-pod trades based on the group's pod assignments.</p>
+                    </div>
+                    {activeOrders.length === 0 && (
+                        <div className="zone-empty">No active strategies. Create one to get started.</div>
+                    )}
+                    {activeOrders.map(renderOrderCard)}
+                </div>
+            )}
 
             {/* Trade Log */}
-            {selectedOrderId && (
+            {activeTab === 'hedgex' && selectedOrderId && (
                 <div className="strat-section">
                     <h3 className="section-title">
                         Trades — {getGroupName(orders.find(o => o.id === selectedOrderId)?.group_id)} / {getInstrument(orders.find(o => o.id === selectedOrderId)?.instrument_id)?.symbol}
@@ -507,7 +561,7 @@ export default function StrategyPanel() {
             )}
 
             {/* Stopped */}
-            {stoppedOrders.length > 0 && (
+            {activeTab === 'hedgex' && stoppedOrders.length > 0 && (
                 <div className="strat-section">
                     <h3 className="section-title">Stopped ({stoppedOrders.length})</h3>
                     {stoppedOrders.map(renderOrderCard)}
@@ -515,10 +569,20 @@ export default function StrategyPanel() {
             )}
 
             {/* Disabled */}
-            {disabledOrders.length > 0 && (
+            {activeTab === 'hedgex' && disabledOrders.length > 0 && (
                 <div className="strat-section">
                     <h3 className="section-title">Disabled ({disabledOrders.length})</h3>
                     {disabledOrders.map(renderOrderCard)}
+                </div>
+            )}
+
+            {activeTab !== 'hedgex' && (
+                <div className="strat-section" style={{ textAlign: 'center', padding: '64px 24px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px dashed var(--glass-border)', marginTop: '32px' }}>
+                    <h3 style={{ fontSize: '24px', color: 'var(--text-primary)', marginBottom: '16px' }}>Under Construction</h3>
+                    <p style={{ color: 'var(--text-secondary)', maxWidth: '500px', margin: '0 auto', lineHeight: '1.6' }}>
+                        The Antigravity execution engine is currently being upgraded to support generic multi-strategy dispatch logic.
+                        In future updates, you will be able to map groups and configure settings independently for the Momentum Fade and ORB strategies here.
+                    </p>
                 </div>
             )}
 
@@ -588,7 +652,7 @@ export default function StrategyPanel() {
 
                                 <div className="form-row">
                                     <div className="form-group">
-                                        <label>{form.direction === "LONG" ? "📈 Long Side (Primary)" : "📉 Short Side (Primary)"} Take Profit (ticks)</label>
+                                        <label>Primary Pod Take Profit (ticks)</label>
                                         <input type="number" step="0.5" min="0" value={form.pot_l_profit_target}
                                             onChange={(e) => {
                                                 const v = parseFloat(e.target.value) || 0;
@@ -597,7 +661,7 @@ export default function StrategyPanel() {
                                         />
                                     </div>
                                     <div className="form-group">
-                                        <label>{form.direction === "LONG" ? "📈 Long Side (Primary)" : "📉 Short Side (Primary)"} Stop Loss (ticks)</label>
+                                        <label>Primary Pod Stop Loss (ticks)</label>
                                         <input type="number" step="0.5" min="0" value={form.pot_l_stop_loss}
                                             onChange={(e) => {
                                                 const v = parseFloat(e.target.value) || 0;
@@ -609,22 +673,22 @@ export default function StrategyPanel() {
 
                                 {linkPtSl && (
                                     <div className="link-info" style={{ marginTop: '8px', padding: '12px', background: 'rgba(59, 130, 246, 0.1)', borderLeft: '3px solid #3b82f6', borderRadius: '4px' }}>
-                                        ↔ {form.direction === "LONG" ? "Short Side (Hedge)" : "Long Side (Hedge)"} Take Profit = <strong>{form.pot_l_stop_loss}</strong> ticks (mirrored)<br />
-                                        ↔ {form.direction === "LONG" ? "Short Side (Hedge)" : "Long Side (Hedge)"} Stop Loss = <strong>{form.pot_l_profit_target}</strong> ticks (mirrored)
+                                        ↔ Hedge Pod Take Profit = <strong>{form.pot_l_stop_loss}</strong> ticks (mirrored)<br />
+                                        ↔ Hedge Pod Stop Loss = <strong>{form.pot_l_profit_target}</strong> ticks (mirrored)
                                     </div>
                                 )}
 
                                 {!linkPtSl && (
                                     <div className="form-row" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                                         <div className="form-group">
-                                            <label>{form.direction === "LONG" ? "📉 Short Side (Hedge)" : "📈 Long Side (Hedge)"} Take Profit (ticks)</label>
+                                            <label>Hedge Pod Take Profit (ticks)</label>
                                             <input type="number" step="0.5" min="0"
                                                 value={form.pot_s_profit_target ?? form.pot_l_stop_loss}
                                                 onChange={(e) => setForm({ ...form, pot_s_profit_target: parseFloat(e.target.value) || 0 })}
                                             />
                                         </div>
                                         <div className="form-group">
-                                            <label>{form.direction === "LONG" ? "📉 Short Side (Hedge)" : "📈 Long Side (Hedge)"} Stop Loss (ticks)</label>
+                                            <label>Hedge Pod Stop Loss (ticks)</label>
                                             <input type="number" step="0.5" min="0"
                                                 value={form.pot_s_stop_loss ?? form.pot_l_profit_target}
                                                 onChange={(e) => setForm({ ...form, pot_s_stop_loss: parseFloat(e.target.value) || 0 })}

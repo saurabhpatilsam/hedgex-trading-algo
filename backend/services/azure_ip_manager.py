@@ -11,6 +11,7 @@ Regions:
 
 import logging
 import os
+from typing import Optional
 
 from azure.identity import ClientSecretCredential
 from azure.mgmt.network import NetworkManagementClient
@@ -197,7 +198,7 @@ def _detach_ip_from_nics(client, pip_name: str):
             logger.debug(f"Skipping NIC {nic_name}: {e}")
 
 
-def get_user_ip(user_name: str) -> str | None:
+def get_user_ip(user_name: str) -> Optional[str]:
     """Get the current public IP for a user."""
     resource_name = _sanitize_name(user_name)
     client = _get_network_client()
