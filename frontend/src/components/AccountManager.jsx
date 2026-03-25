@@ -12,6 +12,10 @@ export default function AccountManager() {
     const [showAddUser, setShowAddUser] = useState(false);
     const [newUserName, setNewUserName] = useState("");
     const [newUserRegion, setNewUserRegion] = useState("india");
+    const [ipMode, setIpMode] = useState("auto"); // 'auto' or 'manual'
+    const [vmIp, setVmIp] = useState("");
+    const [vmUsername, setVmUsername] = useState("");
+    const [vmPassword, setVmPassword] = useState("");
 
     // Broker Account Modal (Credential)
     const [showCredModal, setShowCredModal] = useState(false);
@@ -167,14 +171,30 @@ export default function AccountManager() {
         if (!newUserName.trim()) return;
         clearAlerts();
         try {
-            const res = await usersApi.create({ name: newUserName.trim(), ip_region: newUserRegion });
+            let payload = { name: newUserName.trim() };
+            if (ipMode === "auto") {
+                payload.ip_region = newUserRegion;
+            } else {
+                // Manual VM mode
+                if (!vmIp.trim()) { setError("VM IP is required"); return; }
+                payload.vm_ip = vmIp.trim();
+                payload.vm_username = vmUsername.trim();
+                payload.vm_password = vmPassword.trim();
+            }
+            const res = await usersApi.create(payload);
             setNewUserName("");
             setNewUserRegion("india");
+            setIpMode("auto");
+            setVmIp(""); setVmUsername(""); setVmPassword("");
             setShowAddUser(false);
-            if (res.ip_allocation_error) {
-                setError(`User created successfully, but Azure IP allocation failed: ${res.ip_allocation_error}`);
+            if (ipMode === "auto") {
+                if (res.ip_allocation_error) {
+                    setError(`User created, but Azure IP allocation failed: ${res.ip_allocation_error}`);
+                } else {
+                    setSuccess(`User "${res.name}" created and assigned Azure IP: ${res.static_ip}`);
+                }
             } else {
-                setSuccess(`User "${res.name}" created and assigned an Azure IP`);
+                setSuccess(`User "${res.name}" created with Windows VM at ${res.vm_ip}`);
             }
             load();
         } catch (err) { setError(err.message); }
@@ -404,8 +424,8 @@ export default function AccountManager() {
 
             {/* Add User Inline */}
             {showAddUser && (
-                <form onSubmit={handleAddUser} className="add-user-form">
-                    <div className="username-input-wrapper">
+                <form onSubmit={handleAddUser} className="add-user-form" style={{ flexDirection: "column", gap: 12 }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", width: "100%" }}>
                         <input
                             type="text"
                             className="username-input"
@@ -414,22 +434,85 @@ export default function AccountManager() {
                             placeholder="Enter Username (e.g. Saurabh)"
                             required
                             autoFocus
+                            style={{ flex: 1 }}
                         />
                     </div>
-                    <div className="ip-select-wrapper">
-                        <label className="ip-select-label">IP Region:</label>
-                        <select
-                            value={newUserRegion}
-                            onChange={(e) => setNewUserRegion(e.target.value)}
-                            className="region-select"
-                            title="IP Region"
-                        >
-                            <option value="india">🇮🇳 India</option>
-                            <option value="uk">🇬🇧 UK</option>
-                        </select>
+
+                    {/* IP Mode Toggle */}
+                    <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 }}>
+                            <input
+                                type="radio"
+                                name="ipMode"
+                                value="auto"
+                                checked={ipMode === "auto"}
+                                onChange={() => setIpMode("auto")}
+                            />
+                            🌐 Auto-Allocate IP
+                        </label>
+                        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 }}>
+                            <input
+                                type="radio"
+                                name="ipMode"
+                                value="manual"
+                                checked={ipMode === "manual"}
+                                onChange={() => setIpMode("manual")}
+                            />
+                            🖥️ Manual Windows VM
+                        </label>
                     </div>
-                    <button type="submit" className="btn btn-sm btn-primary">Create User</button>
-                    <button type="button" className="btn btn-sm btn-cancel" onClick={() => setShowAddUser(false)}>Cancel</button>
+
+                    {/* Auto Mode: Region Select */}
+                    {ipMode === "auto" && (
+                        <div className="ip-select-wrapper">
+                            <label className="ip-select-label">IP Region:</label>
+                            <select
+                                value={newUserRegion}
+                                onChange={(e) => setNewUserRegion(e.target.value)}
+                                className="region-select"
+                                title="IP Region"
+                            >
+                                <option value="india">🇮🇳 India</option>
+                                <option value="uk">🇬🇧 UK</option>
+                            </select>
+                        </div>
+                    )}
+
+                    {/* Manual Mode: VM Credentials */}
+                    {ipMode === "manual" && (
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <input
+                                type="text"
+                                className="username-input"
+                                value={vmIp}
+                                onChange={(e) => setVmIp(e.target.value)}
+                                placeholder="VM IP Address (e.g. 98.70.40.95)"
+                                required
+                                style={{ flex: "1 1 200px" }}
+                            />
+                            <input
+                                type="text"
+                                className="username-input"
+                                value={vmUsername}
+                                onChange={(e) => setVmUsername(e.target.value)}
+                                placeholder="VM Username"
+                                style={{ flex: "1 1 140px" }}
+                            />
+                            <input
+                                type="password"
+                                className="username-input"
+                                value={vmPassword}
+                                onChange={(e) => setVmPassword(e.target.value)}
+                                placeholder="VM Password"
+                                style={{ flex: "1 1 140px" }}
+                            />
+                        </div>
+                    )}
+
+                    <div style={{ display: "flex", gap: 8 }}>
+                        <button type="submit" className="btn btn-sm btn-primary">Create User</button>
+                        <button type="button" className="btn btn-sm btn-cancel" onClick={() => { setShowAddUser(false); setIpMode("auto"); }}>Cancel</button>
+                    </div>
                 </form>
             )}
 
@@ -456,8 +539,8 @@ export default function AccountManager() {
                                 <span className="owner-avatar">{user.name.charAt(0).toUpperCase()}</span>
                                 <span className="user-header-name">{user.name}</span>
                                 {user.static_ip ? (
-                                    <span className="ip-badge ip-assigned" title={`Dedicated IP: ${user.static_ip} (${user.proxy_region || 'unknown'})`}>
-                                        {user.proxy_region === 'india' ? '🇮🇳' : user.proxy_region === 'uk' ? '🇬🇧' : '🌐'} {user.static_ip}
+                                    <span className="ip-badge ip-assigned" title={user.vm_ip ? `Windows VM: ${user.vm_ip}` : `Dedicated IP: ${user.static_ip} (${user.proxy_region || 'unknown'})`}>
+                                        {user.vm_ip ? '🖥️' : user.proxy_region === 'india' ? '🇮🇳' : user.proxy_region === 'uk' ? '🇬🇧' : '🌐'} {user.static_ip}
                                     </span>
                                 ) : (
                                     <span className="ip-badge ip-none" title="No dedicated IP assigned">

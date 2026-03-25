@@ -59,6 +59,9 @@ class User(Base):
     static_ip = Column(String, nullable=True)       # Dedicated outbound IP for this user
     proxy_region = Column(String, nullable=True)     # Azure region (e.g. 'india', 'uk')
     proxy_url = Column(String, nullable=True)        # Per-user Windows VM proxy URL (e.g. http://20.x.x.x:9000)
+    vm_ip = Column(String, nullable=True)            # Windows VM public IP
+    vm_username = Column(String, nullable=True)      # Windows VM login username
+    vm_password = Column(String, nullable=True)      # Windows VM login password
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     credentials = relationship("BrokerCredential", back_populates="user", cascade="all, delete-orphan")

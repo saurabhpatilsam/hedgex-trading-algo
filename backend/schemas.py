@@ -71,6 +71,9 @@ class UserCreate(BaseModel):
     name: str
     ip_region: Optional[str] = None  # 'india' or 'uk' — triggers Azure IP creation
     proxy_url: Optional[str] = None  # Per-user Windows VM proxy URL
+    vm_ip: Optional[str] = None      # Windows VM public IP
+    vm_username: Optional[str] = None
+    vm_password: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
@@ -78,6 +81,9 @@ class UserUpdate(BaseModel):
     static_ip: Optional[str] = None
     proxy_region: Optional[str] = None
     proxy_url: Optional[str] = None
+    vm_ip: Optional[str] = None
+    vm_username: Optional[str] = None
+    vm_password: Optional[str] = None
 
 
 class UserResponse(BaseModel):
@@ -86,6 +92,9 @@ class UserResponse(BaseModel):
     static_ip: Optional[str] = None
     proxy_region: Optional[str] = None
     proxy_url: Optional[str] = None
+    vm_ip: Optional[str] = None
+    vm_username: Optional[str] = None
+    vm_password: Optional[str] = None
     ip_allocation_error: Optional[str] = None
     created_at: datetime
     credentials: List[BrokerCredentialResponse] = []

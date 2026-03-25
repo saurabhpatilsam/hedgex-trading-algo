@@ -66,17 +66,30 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     if existing:
         raise HTTPException(status_code=400, detail=f"User '{payload.name}' already exists")
 
+    # If manual VM is provided, derive proxy_url from vm_ip
+    proxy_url = payload.proxy_url
+    if payload.vm_ip and not proxy_url:
+        proxy_url = f"http://{payload.vm_ip}:9000"
+
     user = User(
         name=payload.name,
         proxy_region=payload.ip_region,
-        proxy_url=payload.proxy_url,
+        proxy_url=proxy_url,
+        vm_ip=payload.vm_ip,
+        vm_username=payload.vm_username,
+        vm_password=payload.vm_password,
     )
+
+    # When a manual VM is provided, use the VM IP as the static_ip display value
+    if payload.vm_ip:
+        user.static_ip = payload.vm_ip
+
     db.add(user)
     db.commit()
     db.refresh(user)
 
-    # Auto-create Azure static IP if region specified
-    if payload.ip_region:
+    # Auto-create Azure static IP if region specified (auto mode only)
+    if payload.ip_region and not payload.vm_ip:
         try:
             from services.azure_ip_manager import create_static_ip
             result = create_static_ip(payload.name, payload.ip_region)
