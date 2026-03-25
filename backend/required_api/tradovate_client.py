@@ -660,7 +660,12 @@ class TradovateClient:
 
 def get_proxied_client(user=None, user_id: int = None, proxy_region: str = None) -> TradovateClient:
     """
-    Factory: create a TradovateClient that routes through the user's proxy IP.
+    Factory: create a TradovateClient that routes through the user's proxy.
+
+    Priority:
+      1. user.proxy_url — per-user dedicated Windows VM (e.g. http://20.x.x.x:9000)
+      2. PROXY_URLS[user.proxy_region] — legacy region-based routing
+      3. Direct (no proxy)
 
     Usage from routers:
         from required_api.tradovate_client import get_proxied_client
@@ -672,18 +677,27 @@ def get_proxied_client(user=None, user_id: int = None, proxy_region: str = None)
     """
     uid = None
     region = None
+    proxy_url = None
 
     if user is not None:
         uid = user.id
         region = getattr(user, 'proxy_region', None)
+        proxy_url = getattr(user, 'proxy_url', None)
     elif user_id is not None:
         uid = user_id
         region = proxy_region
 
-    if uid and region and region in PROXY_URLS:
-        proxy_url = PROXY_URLS[region]
-        logger.info(f"Creating proxied client: user={uid}, region={region}, proxy={proxy_url}")
+    # Priority 1: Per-user VM proxy URL
+    if uid and proxy_url:
+        logger.info(f"Creating proxied client: user={uid}, proxy_url={proxy_url}")
         return TradovateClient(proxy_url=proxy_url, user_id=uid)
-    else:
-        logger.info(f"Creating direct client (no proxy): user={uid}, region={region}")
-        return TradovateClient()
+
+    # Priority 2: Region-based proxy (legacy)
+    if uid and region and region in PROXY_URLS:
+        proxy_url_regional = PROXY_URLS[region]
+        logger.info(f"Creating proxied client: user={uid}, region={region}, proxy={proxy_url_regional}")
+        return TradovateClient(proxy_url=proxy_url_regional, user_id=uid)
+
+    # Priority 3: Direct (no proxy)
+    logger.info(f"Creating direct client (no proxy): user={uid}, region={region}")
+    return TradovateClient()

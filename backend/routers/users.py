@@ -66,7 +66,11 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     if existing:
         raise HTTPException(status_code=400, detail=f"User '{payload.name}' already exists")
 
-    user = User(name=payload.name, proxy_region=payload.ip_region)
+    user = User(
+        name=payload.name,
+        proxy_region=payload.ip_region,
+        proxy_url=payload.proxy_url,
+    )
     db.add(user)
     db.commit()
     db.refresh(user)
