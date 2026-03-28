@@ -22,8 +22,11 @@ AZURE_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")
 AZURE_CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET", "")
 AZURE_SUBSCRIPTION_ID = os.getenv("AZURE_SUBSCRIPTION_ID", "")
 RESOURCE_GROUP = os.getenv("AZURE_RESOURCE_GROUP", "HX")
-LOCATION = "centralindia"  # Default region for VMs
-
+# Location lookup map
+AZURE_LOCATIONS = {
+    "india": "centralindia",
+    "uk": "uksouth"
+}
 # Read setup_windows_proxy.ps1 script content
 def _get_proxy_script() -> str:
     script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "setup_windows_proxy.ps1")
@@ -65,15 +68,17 @@ def _get_credentials():
 def _sanitize_name(name: str) -> str:
     return "hx-vm-" + name.lower().replace(" ", "-").replace("_", "-")
 
-def provision_windows_proxy_vm(user_name: str, admin_username: str, admin_password: str) -> Dict[str, Any]:
+def provision_windows_proxy_vm(user_name: str, admin_username: str, admin_password: str, region: str = "india") -> Dict[str, Any]:
     """
     Fully automates the creation of a Windows VM and installs the proxy service.
     Takes ~3-5 minutes to complete on Azure.
     """
-    logger.info(f"Starting automated VM provisioning for user: {user_name}")
+    logger.info(f"Starting automated VM provisioning for user: {user_name} in region: {region}")
     base_name = _sanitize_name(user_name)
-    vnet_name = "hx-vnet"
+    vnet_name = f"hx-vnet-{region}" # separate networking per region
     subnet_name = "default"
+    
+    location = AZURE_LOCATIONS.get(region, "centralindia")
     
     cred = _get_credentials()
     network_client = NetworkManagementClient(cred, AZURE_SUBSCRIPTION_ID)
@@ -85,7 +90,7 @@ def provision_windows_proxy_vm(user_name: str, admin_username: str, admin_passwo
         RESOURCE_GROUP,
         f"{base_name}-ip",
         {
-            "location": LOCATION,
+            "location": location,
             "sku": {"name": "Standard"},
             "public_ip_allocation_method": "Static",
             "public_ip_address_version": "IPv4"
@@ -100,7 +105,7 @@ def provision_windows_proxy_vm(user_name: str, admin_username: str, admin_passwo
         RESOURCE_GROUP,
         f"{base_name}-nsg",
         {
-            "location": LOCATION,
+            "location": location,
             "security_rules": [
                 SecurityRule(
                     name="Allow-SSH", protocol="Tcp", source_port_range="*",
@@ -139,7 +144,7 @@ def provision_windows_proxy_vm(user_name: str, admin_username: str, admin_passwo
         RESOURCE_GROUP,
         f"{base_name}-nic",
         {
-            "location": LOCATION,
+            "location": location,
             "ip_configurations": [{
                 "name": "ipconfig1",
                 "subnet": {"id": subnet.id},
@@ -156,7 +161,7 @@ def provision_windows_proxy_vm(user_name: str, admin_username: str, admin_passwo
         RESOURCE_GROUP,
         base_name,
         {
-            "location": LOCATION,
+            "location": location,
             "os_profile": {
                 "computer_name": base_name[:15],  # Windows limit is 15 chars
                 "admin_username": admin_username,

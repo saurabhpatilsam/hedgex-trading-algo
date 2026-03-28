@@ -73,7 +73,8 @@ def _provision_vm_task(user_id: int):
         alphabet = string.ascii_letters + string.digits + "!@#$%"
         password = 'Hxd1!' + "".join(secrets.choice(alphabet) for _ in range(12))
         
-        result = provision_windows_proxy_vm(user.name, "hxadmin", password)
+        region = getattr(user, "proxy_region", "india") or "india"
+        result = provision_windows_proxy_vm(user.name, "hxadmin", password, region)
         user.vm_ip = result["public_ip"]
         user.static_ip = result["public_ip"]
         user.proxy_url = result["proxy_url"]

@@ -522,18 +522,16 @@ export default function AccountManager() {
                                 </div>
                             )}
 
-                            {ipMode === "auto" && (
-                                <div className="form-group">
-                                    <label>Proxy Region</label>
-                                    <select
-                                        value={newUserRegion}
-                                        onChange={(e) => setNewUserRegion(e.target.value)}
-                                    >
-                                        <option value="india">🇮🇳 India</option>
-                                        <option value="uk">🇬🇧 UK</option>
-                                    </select>
-                                </div>
-                            )}
+                            <div className="form-group">
+                                <label>VM Location (Region)</label>
+                                <select
+                                    value={newUserRegion}
+                                    onChange={(e) => setNewUserRegion(e.target.value)}
+                                >
+                                    <option value="india">🇮🇳 India</option>
+                                    <option value="uk">🇬🇧 UK</option>
+                                </select>
+                            </div>
 
                             {ipMode === "manual" && (
                                 <>
@@ -620,7 +618,7 @@ export default function AccountManager() {
                                     </span>
                                 ) : user.static_ip ? (
                                     <span className="ip-badge ip-assigned" title={user.vm_ip ? `Windows VM: ${user.vm_ip}` : `Dedicated IP: ${user.static_ip} (${user.proxy_region || 'unknown'})`}>
-                                        {user.vm_ip ? '🖥️' : user.proxy_region === 'india' ? '🇮🇳' : user.proxy_region === 'uk' ? '🇬🇧' : '🌐'} {user.static_ip}
+                                        {user.proxy_region === 'india' ? '🇮🇳' : user.proxy_region === 'uk' ? '🇬🇧' : '🌐'} {user.vm_ip ? `VM: ${user.vm_ip}` : user.static_ip}
                                     </span>
                                 ) : (
                                     <span className="ip-badge ip-none" title="No dedicated IP assigned">
