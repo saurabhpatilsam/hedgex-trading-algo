@@ -40,3 +40,5 @@ npm-debug.log*
 
 # OS files
 Thumbs.db
+*.pem
+update_env.py

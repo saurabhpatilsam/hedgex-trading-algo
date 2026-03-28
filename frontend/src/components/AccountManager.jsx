@@ -676,11 +676,11 @@ export default function AccountManager() {
                                                         {cred.error_message && (
                                                             <div className="cred-error-msg" style={{ color: "var(--danger-color)", fontSize: "0.80rem", marginTop: "4px" }}>
                                                                 {cred.error_message}
-                                                                {cred.last_synced_at && (
-                                                                    <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "2px" }}>
-                                                                        Last attempt: {new Date(cred.last_synced_at).toLocaleDateString([], { day: 'numeric', month: 'short' })} — {new Date(cred.last_synced_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
-                                                                    </div>
-                                                                )}
+                                                            </div>
+                                                        )}
+                                                        {cred.last_synced_at && (
+                                                            <div style={{ fontSize: "0.72rem", color: cred.error_message ? "var(--text-muted)" : "rgba(0, 200, 100, 0.7)", marginTop: "4px", display: "flex", alignItems: "center", gap: "4px" }}>
+                                                                {cred.error_message ? "⚠️" : "✅"} {cred.error_message ? "Last attempt" : "Last synced"}: {new Date(cred.last_synced_at).toLocaleDateString([], { day: 'numeric', month: 'short' })} — {new Date(cred.last_synced_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
                                                             </div>
                                                         )}
                                                     </div>
