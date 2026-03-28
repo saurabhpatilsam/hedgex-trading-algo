@@ -201,9 +201,9 @@ export default function AccountManager() {
         clearAlerts();
         try {
             let payload = { name: newUserName.trim() };
-            if (ipMode === "auto") {
+            if (ipMode === "auto" || ipMode === "auto-vm") {
                 if (editingUserId) payload.proxy_region = newUserRegion;
-                else payload.ip_region = newUserRegion;
+                else payload.ip_region = ipMode === "auto-vm" ? "auto-vm" : newUserRegion;
             } else {
                 // Manual VM mode
                 if (!vmIp.trim()) { setError("VM IP is required"); return; }
@@ -479,7 +479,17 @@ export default function AccountManager() {
 
                             <div className="form-group">
                                 <label>IP Allocation Mode</label>
-                                <div style={{ display: 'flex', gap: '16px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '10px', border: '1px solid var(--glass-border)' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '10px', border: '1px solid var(--glass-border)' }}>
+                                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: 'var(--white)', textTransform: 'none', letterSpacing: 'normal', fontWeight: 500 }}>
+                                        <input
+                                            type="radio"
+                                            name="ipMode"
+                                            value="auto-vm"
+                                            checked={ipMode === "auto-vm"}
+                                            onChange={() => setIpMode("auto-vm")}
+                                        />
+                                        🤖 Auto-Provision Windows VM (Takes 5 mins)
+                                    </label>
                                     <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: 'var(--white)', textTransform: 'none', letterSpacing: 'normal', fontWeight: 500 }}>
                                         <input
                                             type="radio"
@@ -488,7 +498,7 @@ export default function AccountManager() {
                                             checked={ipMode === "auto"}
                                             onChange={() => setIpMode("auto")}
                                         />
-                                        🌐 Auto-Allocate IP (Azure)
+                                        🌐 Auto-Allocate IP Only
                                     </label>
                                     <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: 'var(--white)', textTransform: 'none', letterSpacing: 'normal', fontWeight: 500 }}>
                                         <input
@@ -498,10 +508,19 @@ export default function AccountManager() {
                                             checked={ipMode === "manual"}
                                             onChange={() => setIpMode("manual")}
                                         />
-                                        🖥️ Manual Windows VM
+                                        🖥️ Manual Windows VM Link (Bring Your Own)
                                     </label>
                                 </div>
                             </div>
+
+                            {ipMode === "auto-vm" && (
+                                <div className="form-group" style={{ marginTop: -8 }}>
+                                    <div style={{ padding: 12, borderRadius: 8, background: "rgba(0, 255, 128, 0.1)", border: "1px solid rgba(0, 255, 128, 0.3)", color: "var(--text-light)", fontSize: "12px", lineHeight: "1.5" }}>
+                                        <strong>🚀 Full Automation Enabled</strong><br />
+                                        When you click create, Azure will physically boot a new Windows Server VM, configure 100% of network/firewall rules, and inject the proxy Python service automatically.
+                                    </div>
+                                </div>
+                            )}
 
                             {ipMode === "auto" && (
                                 <div className="form-group">
@@ -584,7 +603,11 @@ export default function AccountManager() {
                             <div className="user-header-left">
                                 <span className="owner-avatar">{user.name.charAt(0).toUpperCase()}</span>
                                 <span className="user-header-name">{user.name}</span>
-                                {user.static_ip ? (
+                                {user.ip_allocation_error === "PROVISIONING" ? (
+                                    <span className="ip-badge ip-assigned" style={{ background: "rgba(255, 150, 0, 0.2)", borderColor: "rgba(255, 150, 0, 0.5)", color: "#ffb74d" }}>
+                                        ⏳ Provisioning Azure VM...
+                                    </span>
+                                ) : user.static_ip ? (
                                     <span className="ip-badge ip-assigned" title={user.vm_ip ? `Windows VM: ${user.vm_ip}` : `Dedicated IP: ${user.static_ip} (${user.proxy_region || 'unknown'})`}>
                                         {user.vm_ip ? '🖥️' : user.proxy_region === 'india' ? '🇮🇳' : user.proxy_region === 'uk' ? '🇬🇧' : '🌐'} {user.static_ip}
                                     </span>

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
@@ -60,8 +60,40 @@ def get_user(user_id: int, db: Session = Depends(get_db)):
     return user
 
 
+def _provision_vm_task(user_id: int):
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return
+            
+        from services.azure_vm_manager import provision_windows_proxy_vm
+        import secrets, string
+        alphabet = string.ascii_letters + string.digits + "!@#$%"
+        password = 'Hxd1!' + "".join(secrets.choice(alphabet) for _ in range(12))
+        
+        result = provision_windows_proxy_vm(user.name, "hxadmin", password)
+        user.vm_ip = result["public_ip"]
+        user.static_ip = result["public_ip"]
+        user.proxy_url = result["proxy_url"]
+        user.vm_username = result["admin_username"]
+        user.vm_password = result["admin_password"]
+        user.ip_allocation_error = None
+        db.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger("users").error(f"VM provisioning failed: {e}")
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.ip_allocation_error = f"VM Setup Failed: {e}"
+            db.commit()
+    finally:
+        db.close()
+
+
 @router.post("/", response_model=UserResponse, status_code=201)
-def create_user(payload: UserCreate, db: Session = Depends(get_db)):
+def create_user(payload: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.name == payload.name).first()
     if existing:
         raise HTTPException(status_code=400, detail=f"User '{payload.name}' already exists")
@@ -88,8 +120,13 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    # Auto-create Azure static IP if region specified (auto mode only)
-    if payload.ip_region and not payload.vm_ip:
+    if payload.ip_region == "auto-vm":
+        user.ip_allocation_error = "PROVISIONING"
+        db.commit()
+        db.refresh(user)
+        background_tasks.add_task(_provision_vm_task, user.id)
+    elif payload.ip_region and not payload.vm_ip:
+        # Auto-create basic Azure static IP
         try:
             from services.azure_ip_manager import create_static_ip
             result = create_static_ip(payload.name, payload.ip_region)
@@ -101,7 +138,6 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
             import logging
             logging.getLogger("users").error(f"Azure IP creation failed: {e}")
             user.ip_allocation_error = str(e)
-            # User is created but IP assignment failed — can be retried
 
     return user
 
