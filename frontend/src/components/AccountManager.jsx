@@ -559,12 +559,23 @@ export default function AccountManager() {
                                         </div>
                                         <div className="form-group">
                                             <label>VM Password</label>
-                                            <input
-                                                type="password"
-                                                value={vmPassword}
-                                                onChange={(e) => setVmPassword(e.target.value)}
-                                                placeholder="Password"
-                                            />
+                                            <div style={{ position: "relative" }}>
+                                                <input
+                                                    type={visiblePasswords['vm'] ? "text" : "password"}
+                                                    value={vmPassword}
+                                                    onChange={(e) => setVmPassword(e.target.value)}
+                                                    placeholder="Password"
+                                                    style={{ paddingRight: "40px" }}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setVisiblePasswords(prev => ({ ...prev, vm: !prev.vm }))}
+                                                    style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: "16px", padding: 0, opacity: 0.7 }}
+                                                    title={visiblePasswords['vm'] ? "Hide Password" : "Show Password"}
+                                                >
+                                                    {visiblePasswords['vm'] ? "🙈" : "👁️"}
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                 </>
@@ -816,9 +827,24 @@ export default function AccountManager() {
                             </div>
                             <div className="form-group">
                                 <label>Password</label>
-                                <input type="password" value={credForm.password}
-                                    onChange={(e) => setCredForm({ ...credForm, password: e.target.value })}
-                                    placeholder="Broker Password" required />
+                                <div style={{ position: "relative" }}>
+                                    <input
+                                        type={visiblePasswords['broker'] ? "text" : "password"}
+                                        value={credForm.password}
+                                        onChange={(e) => setCredForm({ ...credForm, password: e.target.value })}
+                                        placeholder="Broker Password"
+                                        required
+                                        style={{ paddingRight: "40px" }}
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setVisiblePasswords(prev => ({ ...prev, broker: !prev.broker }))}
+                                        style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: "16px", padding: 0, opacity: 0.7 }}
+                                        title={visiblePasswords['broker'] ? "Hide Password" : "Show Password"}
+                                    >
+                                        {visiblePasswords['broker'] ? "🙈" : "👁️"}
+                                    </button>
+                                </div>
                             </div>
                             <div className="form-group">
                                 <label className="checkbox-label">
