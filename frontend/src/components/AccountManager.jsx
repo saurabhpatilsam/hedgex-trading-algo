@@ -422,98 +422,108 @@ export default function AccountManager() {
                 </div>
             )}
 
-            {/* Add User Inline */}
+            {/* Add User Modal */}
             {showAddUser && (
-                <form onSubmit={handleAddUser} className="add-user-form" style={{ flexDirection: "column", gap: 12 }}>
-                    <div style={{ display: "flex", gap: 10, alignItems: "center", width: "100%" }}>
-                        <input
-                            type="text"
-                            className="username-input"
-                            value={newUserName}
-                            onChange={(e) => setNewUserName(e.target.value)}
-                            placeholder="Enter Username (e.g. Saurabh)"
-                            required
-                            autoFocus
-                            style={{ flex: 1 }}
-                        />
-                    </div>
-
-                    {/* IP Mode Toggle */}
-                    <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-                        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 }}>
-                            <input
-                                type="radio"
-                                name="ipMode"
-                                value="auto"
-                                checked={ipMode === "auto"}
-                                onChange={() => setIpMode("auto")}
-                            />
-                            🌐 Auto-Allocate IP
-                        </label>
-                        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 }}>
-                            <input
-                                type="radio"
-                                name="ipMode"
-                                value="manual"
-                                checked={ipMode === "manual"}
-                                onChange={() => setIpMode("manual")}
-                            />
-                            🖥️ Manual Windows VM
-                        </label>
-                    </div>
-
-                    {/* Auto Mode: Region Select */}
-                    {ipMode === "auto" && (
-                        <div className="ip-select-wrapper">
-                            <label className="ip-select-label">IP Region:</label>
-                            <select
-                                value={newUserRegion}
-                                onChange={(e) => setNewUserRegion(e.target.value)}
-                                className="region-select"
-                                title="IP Region"
-                            >
-                                <option value="india">🇮🇳 India</option>
-                                <option value="uk">🇬🇧 UK</option>
-                            </select>
+                <div className="modal-overlay">
+                    <div className="modal">
+                        <div className="modal-header">
+                            <h3>Add New User</h3>
+                            <button className="modal-close" onClick={() => { setShowAddUser(false); setIpMode("auto"); }}>✕</button>
                         </div>
-                    )}
+                        <form onSubmit={handleAddUser} className="modal-form">
+                            <div className="form-group">
+                                <label>Username</label>
+                                <input
+                                    type="text"
+                                    value={newUserName}
+                                    onChange={(e) => setNewUserName(e.target.value)}
+                                    placeholder="Enter username (e.g. Saurabh)"
+                                    required
+                                    autoFocus
+                                />
+                            </div>
 
-                    {/* Manual Mode: VM Credentials */}
-                    {ipMode === "manual" && (
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                            <input
-                                type="text"
-                                className="username-input"
-                                value={vmIp}
-                                onChange={(e) => setVmIp(e.target.value)}
-                                placeholder="VM IP Address (e.g. 98.70.40.95)"
-                                required
-                                style={{ flex: "1 1 200px" }}
-                            />
-                            <input
-                                type="text"
-                                className="username-input"
-                                value={vmUsername}
-                                onChange={(e) => setVmUsername(e.target.value)}
-                                placeholder="VM Username"
-                                style={{ flex: "1 1 140px" }}
-                            />
-                            <input
-                                type="password"
-                                className="username-input"
-                                value={vmPassword}
-                                onChange={(e) => setVmPassword(e.target.value)}
-                                placeholder="VM Password"
-                                style={{ flex: "1 1 140px" }}
-                            />
-                        </div>
-                    )}
+                            <div className="form-group">
+                                <label>IP Allocation Mode</label>
+                                <div style={{ display: 'flex', gap: '16px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '10px', border: '1px solid var(--glass-border)' }}>
+                                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: 'var(--white)', textTransform: 'none', letterSpacing: 'normal', fontWeight: 500 }}>
+                                        <input
+                                            type="radio"
+                                            name="ipMode"
+                                            value="auto"
+                                            checked={ipMode === "auto"}
+                                            onChange={() => setIpMode("auto")}
+                                        />
+                                        🌐 Auto-Allocate IP (Azure)
+                                    </label>
+                                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: 'var(--white)', textTransform: 'none', letterSpacing: 'normal', fontWeight: 500 }}>
+                                        <input
+                                            type="radio"
+                                            name="ipMode"
+                                            value="manual"
+                                            checked={ipMode === "manual"}
+                                            onChange={() => setIpMode("manual")}
+                                        />
+                                        🖥️ Manual Windows VM
+                                    </label>
+                                </div>
+                            </div>
 
-                    <div style={{ display: "flex", gap: 8 }}>
-                        <button type="submit" className="btn btn-sm btn-primary">Create User</button>
-                        <button type="button" className="btn btn-sm btn-cancel" onClick={() => { setShowAddUser(false); setIpMode("auto"); }}>Cancel</button>
+                            {ipMode === "auto" && (
+                                <div className="form-group">
+                                    <label>Proxy Region</label>
+                                    <select
+                                        value={newUserRegion}
+                                        onChange={(e) => setNewUserRegion(e.target.value)}
+                                    >
+                                        <option value="india">🇮🇳 India</option>
+                                        <option value="uk">🇬🇧 UK</option>
+                                    </select>
+                                </div>
+                            )}
+
+                            {ipMode === "manual" && (
+                                <>
+                                    <div className="form-group">
+                                        <label>VM IP Address</label>
+                                        <input
+                                            type="text"
+                                            value={vmIp}
+                                            onChange={(e) => setVmIp(e.target.value)}
+                                            placeholder="e.g. 98.70.40.95"
+                                            required
+                                        />
+                                    </div>
+                                    <div className="form-row">
+                                        <div className="form-group">
+                                            <label>VM Username</label>
+                                            <input
+                                                type="text"
+                                                value={vmUsername}
+                                                onChange={(e) => setVmUsername(e.target.value)}
+                                                placeholder="Username"
+                                            />
+                                        </div>
+                                        <div className="form-group">
+                                            <label>VM Password</label>
+                                            <input
+                                                type="password"
+                                                value={vmPassword}
+                                                onChange={(e) => setVmPassword(e.target.value)}
+                                                placeholder="Password"
+                                            />
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+
+                            <div className="modal-actions">
+                                <button type="button" className="btn btn-cancel" onClick={() => { setShowAddUser(false); setIpMode("auto"); }}>Cancel</button>
+                                <button type="submit" className="btn btn-primary">Create User</button>
+                            </div>
+                        </form>
                     </div>
-                </form>
+                </div>
             )}
 
             {/* User Cards */}
@@ -562,7 +572,7 @@ export default function AccountManager() {
                                     + Add Account
                                 </button>
                                 <button className="chip-btn chip-btn-del" onClick={() => handleDeleteUser(user.id, user.name)} title="Delete user">
-                                    ✕
+                                    🗑️
                                 </button>
                                 <span className="expand-arrow">{isExpanded ? "▲" : "▼"}</span>
                             </div>
@@ -594,7 +604,7 @@ export default function AccountManager() {
                                                                 <button className="icon-btn-sm warning" onClick={() => toggleCredStatus(user.id, cred)} title="Toggle">
                                                                     {cred.is_active ? "⏸" : "▶️"}
                                                                 </button>
-                                                                <button className="icon-btn-sm danger" onClick={() => handleDeleteBroker(user.id, cred.id, cred.broker)} title="Delete">✕</button>
+                                                                <button className="icon-btn-sm danger" onClick={() => handleDeleteBroker(user.id, cred.id, cred.broker)} title="Delete">🗑️</button>
                                                             </div>
                                                         </div>
                                                         <div className="cred-square-login">
@@ -687,7 +697,7 @@ export default function AccountManager() {
                                                                                     </span>
                                                                                     <div className="sub-actions-compact" onClick={(e) => e.stopPropagation()}>
                                                                                         <button className="icon-btn-xs" onClick={() => openEditSubAccount(acct)}>✏️</button>
-                                                                                        <button className="icon-btn-xs danger" onClick={() => handleDeleteSubAccount(acct.id)}>✕</button>
+                                                                                        <button className="icon-btn-xs danger" onClick={() => handleDeleteSubAccount(acct.id)}>🗑️</button>
                                                                                     </div>
                                                                                 </div>
                                                                             );

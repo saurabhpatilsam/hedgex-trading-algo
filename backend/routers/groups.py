@@ -91,9 +91,15 @@ def update_group(group_id: int, payload: GroupUpdate, db: Session = Depends(get_
 
 @router.delete("/{group_id}", status_code=204)
 def delete_group(group_id: int, db: Session = Depends(get_db)):
+    from models import ActiveStrategy, GroupOrder  # specific import to handle FKs
     group = db.query(Group).filter(Group.id == group_id).first()
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
+        
+    # Unlink active strategies and delete legacy group orders to prevent FK violations
+    db.query(ActiveStrategy).filter(ActiveStrategy.group_id == group_id).update({"group_id": None})
+    db.query(GroupOrder).filter(GroupOrder.group_id == group_id).delete()
+    
     db.delete(group)  # cascade deletes memberships
     db.commit()
 

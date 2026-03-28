@@ -389,7 +389,7 @@ export default function GroupManager() {
                                         className="chip-btn chip-btn-del"
                                         onClick={() => handleDelete(group.id)}
                                         title="Delete"
-                                    >✕</button>
+                                    >🗑️</button>
                                 </div>
                             </div>
 
@@ -435,7 +435,7 @@ export default function GroupManager() {
                                                                             onDragStart={(e) => handleDragStart(e, id)}
                                                                         >
                                                                             <span>{getAccountName(id)}</span>
-                                                                            <button className="chip-btn chip-btn-del" onClick={() => handleRemoveFromGroup(group.id, id)}>✕</button>
+                                                                            <button className="chip-btn chip-btn-del" onClick={() => handleRemoveFromGroup(group.id, id)}>🗑️</button>
                                                                         </div>
                                                                     ))}
                                                                 </div>

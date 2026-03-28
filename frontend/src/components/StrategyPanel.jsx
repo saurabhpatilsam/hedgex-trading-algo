@@ -495,7 +495,7 @@ export default function StrategyPanel() {
                                 className="chip-btn chip-btn-del"
                                 onClick={() => handleDeleteInstrument(inst.id, inst.symbol)}
                                 title="Delete instrument"
-                            >✕</button>
+                            >🗑️</button>
                         </div>
                     ))}
                 </div>
