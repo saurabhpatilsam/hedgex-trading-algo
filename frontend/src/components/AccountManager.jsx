@@ -46,6 +46,7 @@ export default function AccountManager() {
     const [bulkLoading, setBulkLoading] = useState(false);
     const [flattenResult, setFlattenResult] = useState(null);
     const [flattenConfirm, setFlattenConfirm] = useState(false);
+    const [syncingUsers, setSyncingUsers] = useState(new Set());
 
     const load = useCallback(async () => {
         try {
@@ -304,11 +305,20 @@ export default function AccountManager() {
 
     const handleSyncAll = async (userId) => {
         clearAlerts();
+        setSyncingUsers(prev => new Set(prev).add(userId));
         try {
             const res = await usersApi.syncAll(userId);
             setSuccess(res?.message || "Sync complete");
-            load();
-        } catch (e) { setError(e.message); }
+            await load();
+        } catch (e) {
+            setError(e.message);
+        } finally {
+            setSyncingUsers(prev => {
+                const next = new Set(prev);
+                next.delete(userId);
+                return next;
+            });
+        }
     };
 
     // ── Sub-Accounts ─────────────────────────────────────
@@ -636,8 +646,14 @@ export default function AccountManager() {
                                 <button className="btn btn-sm btn-edit" onClick={() => openEditUser(user)} title="Edit user">
                                     ✏️
                                 </button>
-                                <button className="btn btn-sm btn-primary" onClick={() => handleSyncAll(user.id)} title="Refresh All Sub-Accounts">
-                                    🔄 Refresh All
+                                <button
+                                    className="btn btn-sm btn-primary"
+                                    onClick={() => handleSyncAll(user.id)}
+                                    title="Refresh All Sub-Accounts"
+                                    disabled={syncingUsers.has(user.id)}
+                                >
+                                    <span style={{ display: "inline-block", animation: syncingUsers.has(user.id) ? "spin 1s linear infinite" : "none" }}>🔄</span>
+                                    {syncingUsers.has(user.id) ? " Syncing..." : " Refresh All"}
                                 </button>
                                 <button className="btn btn-sm btn-primary" onClick={() => openAddBroker(user.id)} title="Add Broker Connection">
                                     + Add Account
