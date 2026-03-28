@@ -10,6 +10,7 @@ export default function AccountManager() {
 
     // User creation
     const [showAddUser, setShowAddUser] = useState(false);
+    const [editingUserId, setEditingUserId] = useState(null);
     const [newUserName, setNewUserName] = useState("");
     const [newUserRegion, setNewUserRegion] = useState("india");
     const [ipMode, setIpMode] = useState("auto"); // 'auto' or 'manual'
@@ -19,6 +20,7 @@ export default function AccountManager() {
 
     // Broker Account Modal (Credential)
     const [showCredModal, setShowCredModal] = useState(false);
+    const [isSavingBroker, setIsSavingBroker] = useState(false);
     const [credUserId, setCredUserId] = useState(null);
     const [editingCredId, setEditingCredId] = useState(null);
     const [credForm, setCredForm] = useState({
@@ -166,14 +168,42 @@ export default function AccountManager() {
     };
 
     // ── User CRUD ────────────────────────────────────────
-    const handleAddUser = async (e) => {
+    const openAddUser = () => {
+        setEditingUserId(null);
+        setNewUserName("");
+        setNewUserRegion("india");
+        setIpMode("auto");
+        setVmIp(""); setVmUsername(""); setVmPassword("");
+        setShowAddUser(true);
+        clearAlerts();
+    };
+
+    const openEditUser = (user) => {
+        setEditingUserId(user.id);
+        setNewUserName(user.name);
+
+        if (user.vm_ip) {
+            setIpMode("manual");
+            setVmIp(user.vm_ip);
+            setVmUsername(user.vm_username || "");
+            setVmPassword(user.vm_password || "");
+        } else {
+            setIpMode("auto");
+            setNewUserRegion(user.proxy_region || "india");
+        }
+        setShowAddUser(true);
+        clearAlerts();
+    };
+
+    const handleSaveUser = async (e) => {
         e.preventDefault();
         if (!newUserName.trim()) return;
         clearAlerts();
         try {
             let payload = { name: newUserName.trim() };
             if (ipMode === "auto") {
-                payload.ip_region = newUserRegion;
+                if (editingUserId) payload.proxy_region = newUserRegion;
+                else payload.ip_region = newUserRegion;
             } else {
                 // Manual VM mode
                 if (!vmIp.trim()) { setError("VM IP is required"); return; }
@@ -181,21 +211,23 @@ export default function AccountManager() {
                 payload.vm_username = vmUsername.trim();
                 payload.vm_password = vmPassword.trim();
             }
-            const res = await usersApi.create(payload);
-            setNewUserName("");
-            setNewUserRegion("india");
-            setIpMode("auto");
-            setVmIp(""); setVmUsername(""); setVmPassword("");
-            setShowAddUser(false);
-            if (ipMode === "auto") {
-                if (res.ip_allocation_error) {
-                    setError(`User created, but Azure IP allocation failed: ${res.ip_allocation_error}`);
-                } else {
-                    setSuccess(`User "${res.name}" created and assigned Azure IP: ${res.static_ip}`);
-                }
+
+            if (editingUserId) {
+                await usersApi.update(editingUserId, payload);
+                setSuccess(`User "${payload.name}" updated`);
             } else {
-                setSuccess(`User "${res.name}" created with Windows VM at ${res.vm_ip}`);
+                const res = await usersApi.create(payload);
+                if (ipMode === "auto") {
+                    if (res.ip_allocation_error) {
+                        setError(`User created, but Azure IP allocation failed: ${res.ip_allocation_error}`);
+                    } else {
+                        setSuccess(`User "${res.name}" created and assigned Azure IP: ${res.static_ip}`);
+                    }
+                } else {
+                    setSuccess(`User "${res.name}" created with Windows VM at ${res.vm_ip}`);
+                }
             }
+            setShowAddUser(false);
             load();
         } catch (err) { setError(err.message); }
     };
@@ -235,6 +267,7 @@ export default function AccountManager() {
     const handleSaveBroker = async (e) => {
         e.preventDefault();
         clearAlerts();
+        setIsSavingBroker(true);
         try {
             if (editingCredId) {
                 await usersApi.updateCredential(credUserId, editingCredId, credForm);
@@ -246,6 +279,7 @@ export default function AccountManager() {
             setShowCredModal(false);
             load();
         } catch (err) { setError(err.message); }
+        finally { setIsSavingBroker(false); }
     };
 
     const handleDeleteBroker = async (userId, credId, broker) => {
@@ -329,7 +363,7 @@ export default function AccountManager() {
         <div className="manager-page">
             <div className="page-header">
                 <h2>Users & Accounts</h2>
-                <button className="btn btn-primary" onClick={() => { setShowAddUser(true); clearAlerts(); }}>
+                <button className="btn btn-primary" onClick={openAddUser}>
                     + Add User
                 </button>
             </div>
@@ -424,13 +458,13 @@ export default function AccountManager() {
 
             {/* Add User Modal */}
             {showAddUser && (
-                <div className="modal-overlay">
-                    <div className="modal">
+                <div className="modal-overlay" onClick={() => { setShowAddUser(false); setIpMode("auto"); }}>
+                    <div className="modal" onClick={(e) => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h3>Add New User</h3>
+                            <h3>{editingUserId ? "Edit User" : "Add New User"}</h3>
                             <button className="modal-close" onClick={() => { setShowAddUser(false); setIpMode("auto"); }}>✕</button>
                         </div>
-                        <form onSubmit={handleAddUser} className="modal-form">
+                        <form onSubmit={handleSaveUser} className="modal-form">
                             <div className="form-group">
                                 <label>Username</label>
                                 <input
@@ -519,7 +553,9 @@ export default function AccountManager() {
 
                             <div className="modal-actions">
                                 <button type="button" className="btn btn-cancel" onClick={() => { setShowAddUser(false); setIpMode("auto"); }}>Cancel</button>
-                                <button type="submit" className="btn btn-primary">Create User</button>
+                                <button type="submit" className="btn btn-primary">
+                                    {editingUserId ? "Save Changes" : "Create User"}
+                                </button>
                             </div>
                         </form>
                     </div>
@@ -565,6 +601,9 @@ export default function AccountManager() {
                                 </span>
                             </div>
                             <div className="user-header-right" onClick={(e) => e.stopPropagation()}>
+                                <button className="btn btn-sm btn-edit" onClick={() => openEditUser(user)} title="Edit user">
+                                    ✏️
+                                </button>
                                 <button className="btn btn-sm btn-primary" onClick={() => handleSyncAll(user.id)} title="Refresh All Sub-Accounts">
                                     🔄 Refresh All
                                 </button>
@@ -770,8 +809,8 @@ export default function AccountManager() {
                             </div>
                             <div className="modal-actions">
                                 <button type="button" className="btn btn-cancel" onClick={() => setShowCredModal(false)}>Cancel</button>
-                                <button type="submit" className="btn btn-primary">
-                                    {editingCredId ? "Save Changes" : "Save Broker"}
+                                <button type="submit" className="btn btn-primary" disabled={isSavingBroker}>
+                                    {isSavingBroker ? "⏳ Authenticating..." : (editingCredId ? "Save Changes" : "Save Broker")}
                                 </button>
                             </div>
                         </form>

@@ -134,6 +134,15 @@ def delete_user(user_id: int, db: Session = Depends(get_db)):
             import logging
             logging.getLogger("users").error(f"Azure IP cleanup failed: {e}")
 
+    # Manually delete dependent records to avoid Foreign Key violations
+    # (since some tables like GroupMembership, Trade, OrderRecord lack ON DELETE CASCADE)
+    account_ids = [acc.id for cred in user.credentials for acc in cred.accounts]
+    if account_ids:
+        from models import GroupMembership, Trade, OrderRecord
+        db.query(GroupMembership).filter(GroupMembership.account_id.in_(account_ids)).delete(synchronize_session=False)
+        db.query(Trade).filter(Trade.account_id.in_(account_ids)).delete(synchronize_session=False)
+        db.query(OrderRecord).filter(OrderRecord.account_id.in_(account_ids)).delete(synchronize_session=False)
+
     db.delete(user)
     db.commit()
     return None
