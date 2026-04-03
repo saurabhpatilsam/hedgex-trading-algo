@@ -101,8 +101,8 @@ class HedgingEngine:
             pot_l_stop_loss=config["pot_l_stop_loss"],
             pot_s_profit_target=pot_s_pt,
             pot_s_stop_loss=pot_s_sl,
-            status=StrategyStatus.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            status=StrategyStatus.IDLE,
+            started_at=None,
         )
         db.add(order)
         db.commit()

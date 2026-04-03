@@ -100,6 +100,8 @@ export const instrumentsApi = {
 export const strategyApi = {
     start: (data) =>
         request("/strategy/start", { method: "POST", body: JSON.stringify(data) }),
+    add: (data) =>
+        request("/strategy/add", { method: "POST", body: JSON.stringify(data) }),
     stop: (orderId) =>
         request(`/strategy/stop/${orderId}`, { method: "POST" }),
     pause: (orderId) =>
@@ -114,6 +116,12 @@ export const strategyApi = {
         request(`/strategy/orders/${orderId}`, { method: "PUT", body: JSON.stringify(data) }),
     execute: (orderId) =>
         request(`/strategy/execute/${orderId}`, { method: "POST" }),
+    delete: (orderId) =>
+        request(`/strategy/orders/${orderId}`, { method: "DELETE" }),
+    flatten: (orderId) =>
+        request(`/strategy/orders/${orderId}/flatten`, { method: "POST" }),
+    positions: (orderId) =>
+        request(`/strategy/orders/${orderId}/positions`),
     orders: () => request("/strategy/orders"),
     getOrder: (id) => request(`/strategy/orders/${id}`),
     trades: (limit = 50, groupOrderId = null) => {

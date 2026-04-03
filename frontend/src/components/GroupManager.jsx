@@ -144,6 +144,23 @@ export default function GroupManager() {
         const state = pending[groupId];
         if (!state) return;
 
+        // Dual-pod validation: both pods must have accounts
+        const group = groups.find(g => g.id === groupId);
+        if (group?.pods?.length > 1) {
+            const p1 = group.pods[0];
+            const p2 = group.pods[1];
+            const p1Count = (state[p1] || []).length;
+            const p2Count = (state[p2] || []).length;
+            if (p1Count > 0 && p2Count === 0) {
+                setError(`Cannot save: "${p2}" pod is empty. Add at least one account to both pods when using dual-pod mode.`);
+                return;
+            }
+            if (p2Count > 0 && p1Count === 0) {
+                setError(`Cannot save: "${p1}" pod is empty. Add at least one account to both pods when using dual-pod mode.`);
+                return;
+            }
+        }
+
         setSaving(groupId);
         setError("");
         try {
@@ -468,8 +485,8 @@ export default function GroupManager() {
                                                 <button
                                                     className="btn btn-primary btn-sm"
                                                     onClick={() => handleSave(group.id)}
-                                                    disabled={isSaving}
-                                                    title={potMismatch ? "Dual-pod groups balance recommended" : ""}
+                                                    disabled={isSaving || (p2 && potMismatch && ((state[p1]?.length || 0) === 0 || (state[p2]?.length || 0) === 0))}
+                                                    title={potMismatch && (p2 && ((state[p1]?.length || 0) === 0 || (state[p2]?.length || 0) === 0)) ? "Both pods must have accounts" : potMismatch ? "Pods are unbalanced but saveable" : ""}
                                                 >
                                                     {isSaving ? "Saving…" : "💾 Save Group"}
                                                 </button>

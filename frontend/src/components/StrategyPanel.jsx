@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { strategyApi, groupsApi, instrumentsApi, usersApi } from "../api";
 
 export default function StrategyPanel() {
@@ -9,11 +9,14 @@ export default function StrategyPanel() {
     const [error, setError] = useState("");
     const [success, setSuccess] = useState("");
     const [showModal, setShowModal] = useState(false);
-    const [editingOrder, setEditingOrder] = useState(null); // null = create new
+    const [editingOrder, setEditingOrder] = useState(null);
     const [selectedOrderId, setSelectedOrderId] = useState(null);
     const [linkPtSl, setLinkPtSl] = useState(true);
-    const [executing, setExecuting] = useState({}); // { orderId: true } while placing
+    const [executing, setExecuting] = useState({});
     const [activeTab, setActiveTab] = useState("hedgex");
+    const [executionResults, setExecutionResults] = useState(null); // show after execute
+    const [livePositions, setLivePositions] = useState({}); // { orderId: { positions: [...] } }
+    const [flattening, setFlattening] = useState({});
 
     // Instrument inline add
     const [showAddInst, setShowAddInst] = useState(false);
@@ -52,6 +55,31 @@ export default function StrategyPanel() {
         strategyApi.trades(50, selectedOrderId).then(setTrades).catch(() => { });
     }, [selectedOrderId]);
 
+    // ── Live P&L polling for RUNNING strategies ─────────
+    const pollingRef = useRef(null);
+    const runningOrderIds = orders.filter(o => o.status === "RUNNING").map(o => o.id);
+
+    useEffect(() => {
+        if (runningOrderIds.length === 0) {
+            if (pollingRef.current) clearInterval(pollingRef.current);
+            return;
+        }
+
+        const fetchPositions = async () => {
+            for (const orderId of runningOrderIds) {
+                try {
+                    const data = await strategyApi.positions(orderId);
+                    setLivePositions(prev => ({ ...prev, [orderId]: data }));
+                } catch { /* silent */ }
+            }
+        };
+
+        fetchPositions(); // immediate
+        pollingRef.current = setInterval(fetchPositions, 10000); // every 10s
+
+        return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
+    }, [runningOrderIds.join(",")]);
+
     // ── Instrument Inline CRUD ───────────────────────────
     const handleAddInstrument = async (e) => {
         e.preventDefault();
@@ -86,14 +114,9 @@ export default function StrategyPanel() {
         clearAlerts();
         try {
             const users = await usersApi.list();
-            if (!users || users.length === 0) {
-                setError("No users found to sync instruments.");
-                return;
-            }
-            // Pick the first user that has broker credentials (e.g. Suraj)
             const userWithCreds = users.find(u => u.credentials && u.credentials.length > 0);
             if (!userWithCreds) {
-                setError("No user with broker credentials found. Add credentials first.");
+                setError("No user with broker credentials found.");
                 return;
             }
             const res = await instrumentsApi.sync(userWithCreds.id);
@@ -105,7 +128,7 @@ export default function StrategyPanel() {
     };
 
     // ── Actions ──────────────────────────────────────────
-    const clearAlerts = () => { setError(""); setSuccess(""); };
+    const clearAlerts = () => { setError(""); setSuccess(""); setExecutionResults(null); };
 
     const openCreateModal = () => {
         setEditingOrder(null);
@@ -127,7 +150,6 @@ export default function StrategyPanel() {
             pot_s_profit_target: order.pot_s_profit_target,
             pot_s_stop_loss: order.pot_s_stop_loss,
         });
-        // Check if PTSL is mirrored
         setLinkPtSl(
             order.pot_s_profit_target === order.pot_l_stop_loss &&
             order.pot_s_stop_loss === order.pot_l_profit_target
@@ -141,7 +163,6 @@ export default function StrategyPanel() {
         clearAlerts();
         try {
             if (editingOrder) {
-                // Edit existing
                 const payload = {
                     direction: form.direction,
                     quantity: form.quantity,
@@ -153,7 +174,6 @@ export default function StrategyPanel() {
                 await strategyApi.edit(editingOrder.id, payload);
                 setSuccess(`Strategy #${editingOrder.id} updated`);
             } else {
-                // Create new
                 const payload = {
                     group_id: parseInt(form.group_id),
                     instrument_id: parseInt(form.instrument_id),
@@ -166,8 +186,8 @@ export default function StrategyPanel() {
                     payload.pot_s_profit_target = form.pot_s_profit_target;
                     payload.pot_s_stop_loss = form.pot_s_stop_loss;
                 }
-                const order = await strategyApi.start(payload);
-                setSuccess(`Strategy started! Order #${order.id}`);
+                const order = await strategyApi.add(payload);
+                setSuccess(`Strategy added! Order #${order.id} — Click ▶ Execute to place orders.`);
                 setSelectedOrderId(order.id);
             }
             setShowModal(false);
@@ -195,9 +215,11 @@ export default function StrategyPanel() {
         setExecuting((prev) => ({ ...prev, [orderId]: true }));
         try {
             const result = await strategyApi.execute(orderId);
-            setSuccess(result.message);
+            setExecutionResults(result);
+            setSuccess(`${result.message} — See execution details below.`);
             const t = await strategyApi.trades(50, orderId);
             setTrades(t);
+            setSelectedOrderId(orderId);
             load();
         } catch (err) {
             setError(err.message);
@@ -206,15 +228,47 @@ export default function StrategyPanel() {
         }
     };
 
+    const handleDelete = async (orderId) => {
+        if (!confirm("Delete this strategy? This cannot be undone.")) return;
+        clearAlerts();
+        try {
+            await strategyApi.delete(orderId);
+            setSuccess(`Strategy #${orderId} deleted`);
+            if (selectedOrderId === orderId) setSelectedOrderId(null);
+            load();
+        } catch (err) {
+            setError(err.message);
+        }
+    };
+
+    const handleFlatten = async (orderId) => {
+        if (!confirm("⚠️ FLATTEN ALL: This will cancel all working orders and close ALL open positions for every account in this strategy. This action cannot be undone. Proceed?")) return;
+        clearAlerts();
+        setFlattening(prev => ({ ...prev, [orderId]: true }));
+        try {
+            const result = await strategyApi.flatten(orderId);
+            setExecutionResults({
+                message: result.message, trades: result.results.map(r => ({
+                    account: r.account,
+                    broker_status: r.success ? "FLATTENED" : "ERROR",
+                    error: r.error || null,
+                    broker_order_id: r.success ? "✅" : "❌",
+                }))
+            });
+            setSuccess(result.message);
+            load();
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setFlattening(prev => ({ ...prev, [orderId]: false }));
+        }
+    };
+
     // ── Helpers ──────────────────────────────────────────
     const getGroupName = (id) => groups.find((g) => g.id === id)?.name || `#${id}`;
     const getInstrument = (id) => instruments.find((i) => i.id === id);
-    const getInstrumentLabel = (id) => {
-        const inst = getInstrument(id);
-        if (!inst) return `#${id}`;
-        return inst.name ? `${inst.symbol} — ${inst.name}` : inst.symbol;
-    };
 
+    const idleOrders = orders.filter(o => o.status === "IDLE");
     const activeOrders = orders.filter((o) => o.status === "RUNNING" || o.status === "PAUSED");
     const stoppedOrders = orders.filter((o) => o.status === "STOPPED");
     const disabledOrders = orders.filter((o) => o.status === "DISABLED");
@@ -226,18 +280,36 @@ export default function StrategyPanel() {
             PAUSED: "badge-paused",
             STOPPED: "badge-stopped",
             DISABLED: "badge-disabled",
-            IDLE: "badge-stopped",
+            IDLE: "badge-idle",
         };
         return <span className={`status-badge ${cls[status] || ""}`}>{status}</span>;
     };
 
-    // ── Render an order card (fully expanded) ────────────
+    // ── P&L display helper ──────────────────────────────
+    const PnlValue = ({ value }) => {
+        if (value === undefined || value === null) return <span style={{ color: 'var(--gray-500)' }}>—</span>;
+        const isPositive = value > 0;
+        const isNegative = value < 0;
+        return (
+            <span style={{
+                color: isPositive ? '#22c55e' : isNegative ? '#ef4444' : 'var(--gray-400)',
+                fontWeight: 'bold',
+                fontFamily: 'monospace',
+            }}>
+                {isPositive ? '+' : ''}{value.toFixed(2)}
+            </span>
+        );
+    };
+
+    // ── Render an order card ─────────────────────────────
     const renderOrderCard = (order) => {
+        const isIdle = order.status === "IDLE";
         const isRunning = order.status === "RUNNING";
         const isPaused = order.status === "PAUSED";
         const isStopped = order.status === "STOPPED";
         const isDisabled = order.status === "DISABLED";
         const isExecuting = executing[order.id];
+        const isFlattening = flattening[order.id];
 
         const group = groups.find((g) => g.id === order.group_id);
         const primaryPodName = group?.pods?.[0] || "Primary";
@@ -253,34 +325,46 @@ export default function StrategyPanel() {
         const s_tp = order.pot_s_profit_target ?? p_sl;
         const s_sl = order.pot_s_stop_loss ?? p_tp;
 
-        const longTp = isPrimaryLong ? p_tp : s_tp;
-        const longSl = isPrimaryLong ? p_sl : s_sl;
-        const shortTp = isPrimaryLong ? s_tp : p_tp;
-        const shortSl = isPrimaryLong ? s_sl : p_sl;
+        // Live positions data
+        const posData = livePositions[order.id]?.positions || [];
 
         return (
             <div key={order.id} className={`order-card order-${order.status.toLowerCase()}`}>
-                {/* Top bar: name + status + controls */}
+                {/* Top bar */}
                 <div className="order-card-top" style={{ flexWrap: 'wrap', gap: '10px' }}>
                     <div className="order-info" style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                        <span className="order-group" style={{ fontSize: '15px', fontWeight: 'bold', color: 'var(--gray-100)' }}>
+                        <span style={{ fontSize: '15px', fontWeight: 'bold', color: 'var(--gray-100)' }}>
                             {group?.name || `#${order.group_id}`}
                         </span>
-                        <span className="order-sep" style={{ color: 'var(--gray-500)' }}>|</span>
-                        <span className="order-instrument" style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--accent-1)', background: 'rgba(139, 92, 246, 0.1)', padding: '2px 8px', borderRadius: '4px' }}>
+                        <span style={{ color: 'var(--gray-500)' }}>|</span>
+                        <span style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--accent-1)', background: 'rgba(139, 92, 246, 0.1)', padding: '2px 8px', borderRadius: '4px' }}>
                             {instrument?.symbol || `#${order.instrument_id}`}
                         </span>
-                        <span className="order-instrument" style={{ fontSize: '12px', color: 'var(--gray-400)' }}>
+                        <span style={{ fontSize: '12px', color: 'var(--gray-400)' }}>
                             ({order.quantity} Contract{order.quantity !== 1 ? 's' : ''}, Primary is {order.direction})
                         </span>
                         <StatusBadge status={order.status} />
                         {isExecuting && <span className="executing-badge">⏳ Placing Orders…</span>}
+                        {isFlattening && <span className="executing-badge" style={{ background: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>🔴 Flattening…</span>}
                     </div>
                     <div className="order-controls">
+                        {isIdle && (
+                            <>
+                                <button className="btn btn-sm btn-execute" onClick={() => handleExecute(order.id)} disabled={isExecuting}>
+                                    {isExecuting ? "⏳ Placing…" : "▶ Execute"}
+                                </button>
+                                <button className="btn btn-sm btn-edit" onClick={() => openEditModal(order)}>✏️ Edit</button>
+                                <button className="btn btn-sm btn-stop-sm" onClick={() => handleDelete(order.id)}>🗑️ Delete</button>
+                            </>
+                        )}
                         {isRunning && (
                             <>
                                 <button className="btn btn-sm btn-execute" onClick={() => handleExecute(order.id)} disabled={isExecuting}>
                                     {isExecuting ? "⏳ Placing…" : "▶ Execute"}
+                                </button>
+                                <button className="btn btn-sm btn-flatten" onClick={() => handleFlatten(order.id)} disabled={isFlattening}
+                                    style={{ background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>
+                                    {isFlattening ? "🔴 Flattening…" : "🔴 Flatten All"}
                                 </button>
                                 <button className="btn btn-sm btn-pause" onClick={() => handleAction("pause", order.id)}>⏸ Pause</button>
                                 <button className="btn btn-sm btn-stop-sm" onClick={() => handleAction("stop", order.id)}>■ Stop</button>
@@ -289,6 +373,10 @@ export default function StrategyPanel() {
                         {isPaused && (
                             <>
                                 <button className="btn btn-sm btn-resume" onClick={() => handleAction("resume", order.id)}>▶ Resume</button>
+                                <button className="btn btn-sm btn-flatten" onClick={() => handleFlatten(order.id)} disabled={isFlattening}
+                                    style={{ background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>
+                                    {isFlattening ? "🔴 Flattening…" : "🔴 Flatten All"}
+                                </button>
                                 <button className="btn btn-sm btn-stop-sm" onClick={() => handleAction("stop", order.id)}>■ Stop</button>
                             </>
                         )}
@@ -296,10 +384,14 @@ export default function StrategyPanel() {
                             <>
                                 <button className="btn btn-sm btn-resume" onClick={() => handleAction("resume", order.id)}>▶ Restart</button>
                                 <button className="btn btn-sm btn-disable" onClick={() => handleAction("disable", order.id)}>⊘ Disable</button>
+                                <button className="btn btn-sm btn-stop-sm" onClick={() => handleDelete(order.id)}>🗑️ Delete</button>
                             </>
                         )}
                         {isDisabled && (
-                            <button className="btn btn-sm btn-resume" onClick={() => handleAction("enable", order.id)}>↩ Enable</button>
+                            <>
+                                <button className="btn btn-sm btn-resume" onClick={() => handleAction("enable", order.id)}>↩ Enable</button>
+                                <button className="btn btn-sm btn-stop-sm" onClick={() => handleDelete(order.id)}>🗑️ Delete</button>
+                            </>
                         )}
                         <button className="btn btn-sm btn-edit" onClick={() => openEditModal(order)}>✏️ Edit</button>
                         <button
@@ -323,11 +415,19 @@ export default function StrategyPanel() {
                                 <span style={{ color: 'var(--gray-400)', marginRight: '8px' }}>Accounts:</span>
                                 {primaryAccounts.length > 0 ? (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
-                                        {primaryAccounts.map(a => (
-                                            <span key={a.account_id} style={{ color: 'var(--gray-200)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '4px', display: 'inline-block', width: 'fit-content' }}>
-                                                👤 {a.account_name}
-                                            </span>
-                                        ))}
+                                        {primaryAccounts.map(a => {
+                                            const posInfo = posData.find(p => p.account_name === a.account_name);
+                                            return (
+                                                <div key={a.account_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '4px' }}>
+                                                    <span style={{ color: 'var(--gray-200)' }}>👤 {a.account_name}</span>
+                                                    {posInfo && (
+                                                        <span style={{ fontSize: '12px' }}>
+                                                            P&L: <PnlValue value={posInfo.unrealized_pnl} />
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 ) : (
                                     <span style={{ color: 'var(--gray-500)', fontStyle: 'italic' }}>None configured</span>
@@ -357,11 +457,19 @@ export default function StrategyPanel() {
                                     <span style={{ color: 'var(--gray-400)', marginRight: '8px' }}>Accounts:</span>
                                     {hedgeAccounts.length > 0 ? (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
-                                            {hedgeAccounts.map(a => (
-                                                <span key={a.account_id} style={{ color: 'var(--gray-200)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '4px', display: 'inline-block', width: 'fit-content' }}>
-                                                    👤 {a.account_name}
-                                                </span>
-                                            ))}
+                                            {hedgeAccounts.map(a => {
+                                                const posInfo = posData.find(p => p.account_name === a.account_name);
+                                                return (
+                                                    <div key={a.account_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '4px' }}>
+                                                        <span style={{ color: 'var(--gray-200)' }}>👤 {a.account_name}</span>
+                                                        {posInfo && (
+                                                            <span style={{ fontSize: '12px' }}>
+                                                                P&L: <PnlValue value={posInfo.unrealized_pnl} />
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
                                         </div>
                                     ) : (
                                         <span style={{ color: 'var(--gray-500)', fontStyle: 'italic' }}>None configured</span>
@@ -380,8 +488,52 @@ export default function StrategyPanel() {
                             </div>
                         </div>
                     )}
-
                 </div>
+
+                {/* Live Positions Table (for running strategies) */}
+                {isRunning && posData.length > 0 && (
+                    <div style={{ marginTop: '16px', padding: '16px', background: 'rgba(59,130,246,0.05)', borderRadius: '8px', border: '1px solid rgba(59,130,246,0.15)' }}>
+                        <h4 style={{ fontSize: '13px', fontWeight: 'bold', color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>📊 Live Positions & P&L</h4>
+                        <div className="table-container">
+                            <table className="data-table" style={{ fontSize: '13px' }}>
+                                <thead>
+                                    <tr>
+                                        <th>Account</th>
+                                        <th>Pod</th>
+                                        <th>Balance</th>
+                                        <th>Unrealized P&L</th>
+                                        <th>Realized P&L</th>
+                                        <th>Open Positions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {posData.map((p, idx) => (
+                                        <tr key={idx}>
+                                            <td style={{ fontWeight: '600' }}>{p.account_name}</td>
+                                            <td><span className={`badge ${p.pod === primaryPodName ? 'badge-long' : 'badge-short'}`}>{p.pod}</span></td>
+                                            <td style={{ fontFamily: 'monospace' }}>${(p.balance || 0).toFixed(2)}</td>
+                                            <td><PnlValue value={p.unrealized_pnl} /></td>
+                                            <td><PnlValue value={p.realized_pnl} /></td>
+                                            <td>
+                                                {p.error ? (
+                                                    <span style={{ color: '#ef4444', fontSize: '12px' }}>⚠ {p.error}</span>
+                                                ) : p.positions?.length > 0 ? (
+                                                    p.positions.map((pos, pi) => (
+                                                        <span key={pi} style={{ display: 'inline-block', marginRight: '8px', fontSize: '12px', background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px' }}>
+                                                            {pos.net_position > 0 ? '📈' : '📉'} {Math.abs(pos.net_position)} @ {pos.average_price.toFixed(2)}
+                                                        </span>
+                                                    ))
+                                                ) : (
+                                                    <span style={{ color: 'var(--gray-500)', fontSize: '12px' }}>No open positions</span>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
 
                 {/* Progress bar when executing */}
                 {isExecuting && <div className="executing-bar" style={{ marginTop: '16px' }}><div className="executing-fill" /></div>}
@@ -394,57 +546,65 @@ export default function StrategyPanel() {
             <div className="page-header">
                 <h2>Strategy Control</h2>
                 <button className="btn btn-primary" onClick={openCreateModal}>
-                    ⚡ New Strategy
+                    ➕ Add Strategy
                 </button>
             </div>
 
             {error && <div className="error-banner">{error}</div>}
             {success && <div className="success-banner">{success}</div>}
 
+            {/* Execution Results Panel */}
+            {executionResults && (
+                <div style={{ margin: '16px 0', padding: '16px', background: 'rgba(59,130,246,0.08)', borderRadius: '8px', border: '1px solid rgba(59,130,246,0.2)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                        <h4 style={{ fontSize: '14px', fontWeight: 'bold', color: '#3b82f6' }}>📋 Execution Results</h4>
+                        <button className="btn btn-sm btn-cancel" onClick={() => setExecutionResults(null)}>✕ Close</button>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {(executionResults.trades || []).map((t, idx) => (
+                            <div key={idx} style={{
+                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                padding: '8px 12px', borderRadius: '6px',
+                                background: t.error ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.08)',
+                                border: `1px solid ${t.error ? 'rgba(239,68,68,0.2)' : 'rgba(34,197,94,0.2)'}`,
+                            }}>
+                                <span style={{ fontWeight: '600', fontSize: '13px' }}>
+                                    {t.error ? '❌' : '✅'} {t.account}
+                                </span>
+                                <span style={{ fontSize: '12px', color: 'var(--gray-400)' }}>
+                                    {t.error
+                                        ? <span style={{ color: '#ef4444' }}>{t.error}</span>
+                                        : <>Order #{t.broker_order_id} — <span className={`badge ${t.side === 'LONG' ? 'badge-long' : 'badge-short'}`}>{t.side}</span> {t.quantity}x @ ${t.price?.toFixed(2)} — Status: {t.broker_status}</>
+                                    }
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {/* Tabs Row */}
             <div style={{ display: 'flex', gap: '16px', borderBottom: '1px solid var(--glass-border)', marginBottom: '24px' }}>
-                <button
-                    style={{
-                        padding: '12px 24px',
-                        background: activeTab === 'hedgex' ? 'rgba(139, 92, 246, 0.1)' : 'transparent',
-                        color: activeTab === 'hedgex' ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                        borderBottom: activeTab === 'hedgex' ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                        borderTop: 'none', borderLeft: 'none', borderRight: 'none',
-                        cursor: 'pointer', fontSize: '15px', fontWeight: '600', transition: 'all 0.2s', outline: 'none'
-                    }}
-                    onClick={() => setActiveTab('hedgex')}
-                >
-                    HedgeX Master Strategy
-                </button>
-                <button
-                    style={{
-                        padding: '12px 24px',
-                        background: activeTab === 'coming_soon' ? 'rgba(139, 92, 246, 0.1)' : 'transparent',
-                        color: activeTab === 'coming_soon' ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                        borderBottom: activeTab === 'coming_soon' ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                        borderTop: 'none', borderLeft: 'none', borderRight: 'none',
-                        cursor: 'pointer', fontSize: '15px', fontWeight: '600', transition: 'all 0.2s', outline: 'none'
-                    }}
-                    onClick={() => setActiveTab('coming_soon')}
-                >
-                    Momentum Fade (Coming Soon)
-                </button>
-                <button
-                    style={{
-                        padding: '12px 24px',
-                        background: activeTab === 'orb' ? 'rgba(139, 92, 246, 0.1)' : 'transparent',
-                        color: activeTab === 'orb' ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                        borderBottom: activeTab === 'orb' ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                        borderTop: 'none', borderLeft: 'none', borderRight: 'none',
-                        cursor: 'pointer', fontSize: '15px', fontWeight: '600', transition: 'all 0.2s', outline: 'none'
-                    }}
-                    onClick={() => setActiveTab('orb')}
-                >
-                    Opening Range Breakout (Coming Soon)
-                </button>
+                {[
+                    { key: 'hedgex', label: 'HedgeX Master Strategy' },
+                    { key: 'coming_soon', label: 'Momentum Fade (Coming Soon)' },
+                    { key: 'orb', label: 'Opening Range Breakout (Coming Soon)' },
+                ].map(tab => (
+                    <button key={tab.key}
+                        style={{
+                            padding: '12px 24px',
+                            background: activeTab === tab.key ? 'rgba(139, 92, 246, 0.1)' : 'transparent',
+                            color: activeTab === tab.key ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                            borderBottom: activeTab === tab.key ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                            borderTop: 'none', borderLeft: 'none', borderRight: 'none',
+                            cursor: 'pointer', fontSize: '15px', fontWeight: '600', transition: 'all 0.2s', outline: 'none'
+                        }}
+                        onClick={() => setActiveTab(tab.key)}
+                    >{tab.label}</button>
+                ))}
             </div>
 
-            {/* Instruments Section (inline, shared across all strategies) */}
+            {/* Instruments Section */}
             <div className="instruments-inline-section">
                 <div className="instruments-inline-header">
                     <h4>Instruments</h4>
@@ -462,20 +622,8 @@ export default function StrategyPanel() {
 
                 {showAddInst && (
                     <form onSubmit={handleAddInstrument} className="inst-add-form">
-                        <input
-                            type="text"
-                            value={newInstSymbol}
-                            onChange={(e) => setNewInstSymbol(e.target.value.toUpperCase())}
-                            placeholder="Symbol (e.g. ES)"
-                            required
-                            autoFocus
-                        />
-                        <input
-                            type="text"
-                            value={newInstName}
-                            onChange={(e) => setNewInstName(e.target.value)}
-                            placeholder="Name (e.g. E-mini S&P 500)"
-                        />
+                        <input type="text" value={newInstSymbol} onChange={(e) => setNewInstSymbol(e.target.value.toUpperCase())} placeholder="Symbol (e.g. ES)" required autoFocus />
+                        <input type="text" value={newInstName} onChange={(e) => setNewInstName(e.target.value)} placeholder="Name (e.g. E-mini S&P 500)" />
                         <button type="submit" className="btn btn-sm btn-primary">Add</button>
                         <button type="button" className="btn btn-sm btn-cancel" onClick={() => setShowAddInst(false)}>Cancel</button>
                     </form>
@@ -491,89 +639,99 @@ export default function StrategyPanel() {
                         <div key={inst.id} className="inst-chip">
                             <span className="inst-chip-symbol">{inst.symbol}</span>
                             {inst.name && <span className="inst-chip-name">{inst.name}</span>}
-                            <button
-                                className="chip-btn chip-btn-del"
-                                onClick={() => handleDeleteInstrument(inst.id, inst.symbol)}
-                                title="Delete instrument"
-                            >🗑️</button>
+                            <button className="chip-btn chip-btn-del" onClick={() => handleDeleteInstrument(inst.id, inst.symbol)} title="Delete instrument">🗑️</button>
                         </div>
                     ))}
                 </div>
             </div>
 
-            {/* Active Strategies */}
+            {/* HedgeX Tab Content */}
             {activeTab === 'hedgex' && (
-                <div className="strat-section">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <h3 className="section-title">Active ({activeOrders.length})</h3>
-                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>HedgeX executes synchronized dual-pod trades based on the group's pod assignments.</p>
-                    </div>
-                    {activeOrders.length === 0 && (
-                        <div className="zone-empty">No active strategies. Create one to get started.</div>
+                <>
+                    {/* Idle Strategies (new — ready to execute) */}
+                    {idleOrders.length > 0 && (
+                        <div className="strat-section">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <h3 className="section-title">⏳ Ready ({idleOrders.length})</h3>
+                                <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Strategies waiting for execution. Review settings, then click ▶ Execute.</p>
+                            </div>
+                            {idleOrders.map(renderOrderCard)}
+                        </div>
                     )}
-                    {activeOrders.map(renderOrderCard)}
-                </div>
-            )}
 
-            {/* Trade Log */}
-            {activeTab === 'hedgex' && selectedOrderId && (
-                <div className="strat-section">
-                    <h3 className="section-title">
-                        Trades — {getGroupName(orders.find(o => o.id === selectedOrderId)?.group_id)} / {getInstrument(orders.find(o => o.id === selectedOrderId)?.instrument_id)?.symbol}
-                    </h3>
-                    <div className="table-container">
-                        <table className="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Time</th>
-                                    <th>Account</th>
-                                    <th>Side</th>
-                                    <th>Qty</th>
-                                    <th>Price</th>
-                                    <th>TP</th>
-                                    <th>SL</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {trades.length === 0 && (
-                                    <tr><td colSpan="8" className="empty-state">No trades yet. Execute the strategy.</td></tr>
-                                )}
-                                {trades.map((t) => {
-                                    const member = groups.flatMap(g => g.members || []).find(m => m.account_id === t.account_id);
-                                    return (
-                                        <tr key={t.id}>
-                                            <td className="time-cell">{new Date(t.timestamp).toLocaleTimeString()}</td>
-                                            <td>{member?.account_name || `#${t.account_id}`}</td>
-                                            <td><span className={`badge ${t.side === "LONG" ? "badge-long" : "badge-short"}`}>{t.side}</span></td>
-                                            <td>{t.quantity}</td>
-                                            <td>${t.entry_price.toFixed(2)}</td>
-                                            <td className="ptsl-tp">{t.profit_target ?? "—"}</td>
-                                            <td className="ptsl-sl">{t.stop_loss ?? "—"}</td>
-                                            <td><span className="badge badge-neutral">{t.status}</span></td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
+                    {/* Active Strategies */}
+                    <div className="strat-section">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 className="section-title">Active ({activeOrders.length})</h3>
+                            <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>HedgeX executes synchronized dual-pod trades based on the group's pod assignments.</p>
+                        </div>
+                        {activeOrders.length === 0 && idleOrders.length === 0 && (
+                            <div className="zone-empty">No strategies yet. Click "➕ Add Strategy" to get started.</div>
+                        )}
+                        {activeOrders.map(renderOrderCard)}
                     </div>
-                </div>
-            )}
 
-            {/* Stopped */}
-            {activeTab === 'hedgex' && stoppedOrders.length > 0 && (
-                <div className="strat-section">
-                    <h3 className="section-title">Stopped ({stoppedOrders.length})</h3>
-                    {stoppedOrders.map(renderOrderCard)}
-                </div>
-            )}
+                    {/* Trade Log */}
+                    {selectedOrderId && (
+                        <div className="strat-section">
+                            <h3 className="section-title">
+                                Trades — {getGroupName(orders.find(o => o.id === selectedOrderId)?.group_id)} / {getInstrument(orders.find(o => o.id === selectedOrderId)?.instrument_id)?.symbol}
+                            </h3>
+                            <div className="table-container">
+                                <table className="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Time</th>
+                                            <th>Account</th>
+                                            <th>Side</th>
+                                            <th>Qty</th>
+                                            <th>Price</th>
+                                            <th>TP</th>
+                                            <th>SL</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {trades.length === 0 && (
+                                            <tr><td colSpan="8" className="empty-state">No trades yet. Execute the strategy.</td></tr>
+                                        )}
+                                        {trades.map((t) => {
+                                            const member = groups.flatMap(g => g.members || []).find(m => m.account_id === t.account_id);
+                                            return (
+                                                <tr key={t.id}>
+                                                    <td className="time-cell">{new Date(t.timestamp).toLocaleTimeString()}</td>
+                                                    <td>{member?.account_name || `#${t.account_id}`}</td>
+                                                    <td><span className={`badge ${t.side === "LONG" ? "badge-long" : "badge-short"}`}>{t.side}</span></td>
+                                                    <td>{t.quantity}</td>
+                                                    <td>${t.entry_price.toFixed(2)}</td>
+                                                    <td className="ptsl-tp">{t.profit_target ?? "—"}</td>
+                                                    <td className="ptsl-sl">{t.stop_loss ?? "—"}</td>
+                                                    <td><span className="badge badge-neutral">{t.status}</span></td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
 
-            {/* Disabled */}
-            {activeTab === 'hedgex' && disabledOrders.length > 0 && (
-                <div className="strat-section">
-                    <h3 className="section-title">Disabled ({disabledOrders.length})</h3>
-                    {disabledOrders.map(renderOrderCard)}
-                </div>
+                    {/* Stopped */}
+                    {stoppedOrders.length > 0 && (
+                        <div className="strat-section">
+                            <h3 className="section-title">Stopped ({stoppedOrders.length})</h3>
+                            {stoppedOrders.map(renderOrderCard)}
+                        </div>
+                    )}
+
+                    {/* Disabled */}
+                    {disabledOrders.length > 0 && (
+                        <div className="strat-section">
+                            <h3 className="section-title">Disabled ({disabledOrders.length})</h3>
+                            {disabledOrders.map(renderOrderCard)}
+                        </div>
+                    )}
+                </>
             )}
 
             {activeTab !== 'hedgex' && (
@@ -581,7 +739,6 @@ export default function StrategyPanel() {
                     <h3 style={{ fontSize: '24px', color: 'var(--text-primary)', marginBottom: '16px' }}>Under Construction</h3>
                     <p style={{ color: 'var(--text-secondary)', maxWidth: '500px', margin: '0 auto', lineHeight: '1.6' }}>
                         The Antigravity execution engine is currently being upgraded to support generic multi-strategy dispatch logic.
-                        In future updates, you will be able to map groups and configure settings independently for the Momentum Fade and ORB strategies here.
                     </p>
                 </div>
             )}
@@ -591,11 +748,10 @@ export default function StrategyPanel() {
                 <div className="modal-overlay" onClick={() => setShowModal(false)}>
                     <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h3>{editingOrder ? `Edit Strategy #${editingOrder.id}` : "Start New Strategy"}</h3>
+                            <h3>{editingOrder ? `Edit Strategy #${editingOrder.id}` : "Add New Strategy"}</h3>
                             <button className="modal-close" onClick={() => setShowModal(false)}>✕</button>
                         </div>
                         <form onSubmit={handleSubmit} className="modal-form">
-                            {/* Group + Instrument (only for new) */}
                             {!editingOrder && (
                                 <div className="form-row">
                                     <div className="form-group">
@@ -701,7 +857,7 @@ export default function StrategyPanel() {
                             <div className="modal-actions">
                                 <button type="button" className="btn btn-cancel" onClick={() => setShowModal(false)}>Cancel</button>
                                 <button type="submit" className="btn btn-primary">
-                                    {editingOrder ? "💾 Save Changes" : "⚡ Start Strategy"}
+                                    {editingOrder ? "💾 Save Changes" : "➕ Add Strategy"}
                                 </button>
                             </div>
                         </form>

@@ -11,9 +11,10 @@ from schemas import GroupOrderCreate, GroupOrderResponse, GroupOrderUpdate, Trad
 router = APIRouter(prefix="/api/strategy", tags=["strategy"])
 
 
-@router.post("/start", response_model=GroupOrderResponse)
-def start_group_strategy(payload: GroupOrderCreate, db: Session = Depends(get_db)):
-    """Start a strategy for a specific group with instrument and PT/SL config."""
+@router.post("/add", response_model=GroupOrderResponse)
+@router.post("/start", response_model=GroupOrderResponse)  # backward compat
+def add_group_strategy(payload: GroupOrderCreate, db: Session = Depends(get_db)):
+    """Add a strategy for a specific group (IDLE status, no orders placed yet)."""
     validation = HedgingEngine.validate_group(db, payload.group_id)
     if not validation["valid"]:
         raise HTTPException(
@@ -28,16 +29,6 @@ def start_group_strategy(payload: GroupOrderCreate, db: Session = Depends(get_db
         raise HTTPException(status_code=400, detail="Instrument is not active")
 
     order = HedgingEngine.start_group_order(db, payload.model_dump())
-
-    # Auto-execute: place real orders immediately on start
-    try:
-        trades = HedgingEngine.execute_group_order(db, order.id)
-        order._auto_executed_trades = trades  # attach for logging
-    except Exception as e:
-        # Don't fail the start if execution fails, just log
-        import logging
-        logging.getLogger(__name__).error(f"Auto-execute failed for order {order.id}: {e}")
-
     return order
 
 
@@ -139,15 +130,21 @@ def edit_group_order(order_id: int, payload: GroupOrderUpdate, db: Session = Dep
 
 @router.post("/execute/{order_id}")
 def execute_group_hedge(order_id: int, db: Session = Depends(get_db)):
-    """Execute one hedge cycle for a running group strategy."""
+    """Execute one hedge cycle for an IDLE or RUNNING group strategy."""
     order = db.query(GroupOrder).filter(GroupOrder.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="GroupOrder not found")
-    if order.status != StrategyStatus.RUNNING:
+    if order.status not in (StrategyStatus.RUNNING, StrategyStatus.IDLE):
         raise HTTPException(
             status_code=400,
-            detail="Strategy must be running to execute trades.",
+            detail="Strategy must be IDLE or RUNNING to execute trades.",
         )
+
+    # Transition IDLE → RUNNING on first execute
+    if order.status == StrategyStatus.IDLE:
+        order.status = StrategyStatus.RUNNING
+        order.started_at = datetime.now(timezone.utc)
+        db.commit()
 
     trades = HedgingEngine.execute_group_order(db, order_id)
     return {"message": f"Executed {len(trades)} trades", "trades": trades}
@@ -172,3 +169,175 @@ def list_trades(limit: int = 50, group_order_id: int = None, db: Session = Depen
     if group_order_id:
         query = query.filter(Trade.group_order_id == group_order_id)
     return query.order_by(Trade.timestamp.desc()).limit(limit).all()
+
+
+@router.delete("/orders/{order_id}", status_code=204)
+def delete_group_order(order_id: int, db: Session = Depends(get_db)):
+    """Delete an IDLE strategy that hasn't been executed yet."""
+    order = db.query(GroupOrder).filter(GroupOrder.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="GroupOrder not found")
+    if order.status not in (StrategyStatus.IDLE, StrategyStatus.STOPPED, StrategyStatus.DISABLED):
+        raise HTTPException(status_code=400, detail="Only IDLE, STOPPED, or DISABLED strategies can be deleted")
+    # Delete associated trades first
+    db.query(Trade).filter(Trade.group_order_id == order_id).delete()
+    db.delete(order)
+    db.commit()
+
+
+@router.post("/orders/{order_id}/flatten")
+def flatten_strategy(order_id: int, db: Session = Depends(get_db)):
+    """Flatten all positions for all accounts in this strategy's group."""
+    from sqlalchemy.orm import joinedload
+    from models import Group, GroupMembership, Account, User, BrokerCredential
+    from required_api.tradovate_client import get_proxied_client
+
+    order = db.query(GroupOrder).filter(GroupOrder.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="GroupOrder not found")
+
+    group = db.query(Group).filter(Group.id == order.group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    memberships = (
+        db.query(GroupMembership)
+        .options(
+            joinedload(GroupMembership.account)
+            .joinedload(Account.credential)
+        )
+        .join(Account)
+        .filter(
+            GroupMembership.group_id == order.group_id,
+            Account.is_active == True,
+        )
+        .all()
+    )
+
+    results = []
+    client_cache = {}
+
+    for m in memberships:
+        account = m.account
+        if not account or not account.tradovate_account_id:
+            results.append({"account": account.name if account else "Unknown", "success": False, "error": "Missing tradovate_account_id"})
+            continue
+
+        cred = account.credential
+        if not cred:
+            results.append({"account": account.name, "success": False, "error": "No credential"})
+            continue
+
+        cred_id = cred.id
+        if cred_id not in client_cache:
+            user = db.query(User).filter(User.id == cred.user_id).first()
+            client = get_proxied_client(user=user)
+            token, err = client.login(cred.login_id, cred.password)
+            if not token:
+                results.append({"account": account.name, "success": False, "error": f"Login failed: {err}"})
+                continue
+            client_cache[cred_id] = client
+
+        client = client_cache[cred_id]
+        try:
+            report = client.flatten_account(
+                account_id=account.tradovate_account_id,
+                account_spec=account.name,
+            )
+            results.append({"account": account.name, "success": True, "report": report})
+        except Exception as e:
+            results.append({"account": account.name, "success": False, "error": str(e)})
+
+    # Stop the strategy
+    order.status = StrategyStatus.STOPPED
+    order.stopped_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return {"message": f"Flattened {len(results)} accounts", "results": results}
+
+
+@router.get("/orders/{order_id}/positions")
+def get_strategy_positions(order_id: int, db: Session = Depends(get_db)):
+    """Get live positions from Tradovate for all accounts in this strategy's group."""
+    from sqlalchemy.orm import joinedload
+    from models import Group, GroupMembership, Account, User, BrokerCredential
+    from required_api.tradovate_client import get_proxied_client
+
+    order = db.query(GroupOrder).filter(GroupOrder.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="GroupOrder not found")
+
+    group = db.query(Group).filter(Group.id == order.group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    memberships = (
+        db.query(GroupMembership)
+        .options(
+            joinedload(GroupMembership.account)
+            .joinedload(Account.credential)
+        )
+        .join(Account)
+        .filter(
+            GroupMembership.group_id == order.group_id,
+            Account.is_active == True,
+        )
+        .all()
+    )
+
+    positions = []
+    client_cache = {}
+
+    for m in memberships:
+        account = m.account
+        if not account or not account.tradovate_account_id:
+            continue
+
+        cred = account.credential
+        if not cred:
+            continue
+
+        cred_id = cred.id
+        if cred_id not in client_cache:
+            user = db.query(User).filter(User.id == cred.user_id).first()
+            client = get_proxied_client(user=user)
+            token, err = client.login(cred.login_id, cred.password)
+            if not token:
+                positions.append({"account_name": account.name, "pod": m.pot, "error": f"Login failed: {err}", "positions": []})
+                continue
+            client_cache[cred_id] = client
+
+        client = client_cache[cred_id]
+        try:
+            acct_positions = client.get_positions(account.tradovate_account_id)
+            # Also get account balance for P&L context
+            state = client.get_account_balance(account.tradovate_account_id)
+            balance = float(state.get("balance") or state.get("cashBalance") or 0)
+            realized_pnl = float(state.get("realizedPnl") or 0)
+            unrealized_pnl = float(state.get("openPnl") or state.get("unrealizedPnl") or 0)
+
+            pos_list = []
+            for p in acct_positions:
+                net_pos = p.get("netPos", 0)
+                if net_pos == 0:
+                    continue
+                pos_list.append({
+                    "contract": p.get("contractId"),
+                    "net_position": net_pos,
+                    "average_price": float(p.get("netPrice") or p.get("avgPrice") or 0),
+                    "unrealized_pnl": float(p.get("openPnl") or 0),
+                })
+
+            positions.append({
+                "account_name": account.name,
+                "account_id": account.id,
+                "pod": m.pot,
+                "balance": balance,
+                "realized_pnl": realized_pnl,
+                "unrealized_pnl": unrealized_pnl,
+                "positions": pos_list,
+            })
+        except Exception as e:
+            positions.append({"account_name": account.name, "pod": m.pot, "error": str(e), "positions": []})
+
+    return {"order_id": order_id, "positions": positions}
