@@ -19,10 +19,11 @@ def _group_response(group: Group) -> dict:
     members = [
         GroupMembershipResponse.from_membership(m) for m in group.memberships
     ]
+    pods = group.pods if group.pods else ["Default"]
     return GroupResponse(
         id=group.id,
         name=group.name,
-        pods=group.pods or [],
+        pods=pods,
         is_active=group.is_active,
         created_at=group.created_at,
         members=members,
@@ -124,8 +125,10 @@ def add_member(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
         
-    if payload.pot not in (group.pods or []):
-        raise HTTPException(status_code=400, detail=f"Invalid pot '{payload.pot}'. Allowed: {group.pods}")
+    # Auto-default empty pods to ['Default']
+    allowed_pods = group.pods if group.pods else ["Default"]
+    if payload.pot not in allowed_pods:
+        raise HTTPException(status_code=400, detail=f"Invalid pot '{payload.pot}'. Allowed: {allowed_pods}")
 
     # ── Same-user validation ──────────────────────────────────
     # Get the user who owns this account
