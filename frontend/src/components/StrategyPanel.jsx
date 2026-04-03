@@ -14,9 +14,14 @@ export default function StrategyPanel() {
     const [linkPtSl, setLinkPtSl] = useState(true);
     const [executing, setExecuting] = useState({});
     const [activeTab, setActiveTab] = useState("hedgex");
-    const [executionResults, setExecutionResults] = useState(null); // show after execute
-    const [livePositions, setLivePositions] = useState({}); // { orderId: { positions: [...] } }
+    const [executionResults, setExecutionResults] = useState(null);
+    const [livePositions, setLivePositions] = useState({});
     const [flattening, setFlattening] = useState({});
+    const [tradeTab, setTradeTab] = useState("active"); // "active" | "history"
+
+    // Price input state per strategy
+    const [entryPrices, setEntryPrices] = useState({});
+    const [fetchingPrice, setFetchingPrice] = useState({});
 
     // Instrument inline add
     const [showAddInst, setShowAddInst] = useState(false);
@@ -74,8 +79,8 @@ export default function StrategyPanel() {
             }
         };
 
-        fetchPositions(); // immediate
-        pollingRef.current = setInterval(fetchPositions, 10000); // every 10s
+        fetchPositions();
+        pollingRef.current = setInterval(fetchPositions, 10000);
 
         return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
     }, [runningOrderIds.join(",")]);
@@ -187,7 +192,7 @@ export default function StrategyPanel() {
                     payload.pot_s_stop_loss = form.pot_s_stop_loss;
                 }
                 const order = await strategyApi.add(payload);
-                setSuccess(`Strategy added! Order #${order.id} — Click ▶ Execute to place orders.`);
+                setSuccess(`Strategy added! Order #${order.id} — Set a price and click ▶ Execute to place orders.`);
                 setSelectedOrderId(order.id);
             }
             setShowModal(false);
@@ -214,9 +219,11 @@ export default function StrategyPanel() {
         clearAlerts();
         setExecuting((prev) => ({ ...prev, [orderId]: true }));
         try {
-            const result = await strategyApi.execute(orderId);
+            const price = entryPrices[orderId] ? parseFloat(entryPrices[orderId]) : null;
+            const result = await strategyApi.execute(orderId, price);
             setExecutionResults(result);
-            setSuccess(`${result.message} — See execution details below.`);
+            const orderType = price ? `Limit @ $${price}` : "Market";
+            setSuccess(`${result.message} (${orderType}) — See execution details below.`);
             const t = await strategyApi.trades(50, orderId);
             setTrades(t);
             setSelectedOrderId(orderId);
@@ -225,6 +232,24 @@ export default function StrategyPanel() {
             setError(err.message);
         } finally {
             setExecuting((prev) => ({ ...prev, [orderId]: false }));
+        }
+    };
+
+    const handleGetLastPrice = async (orderId, instrumentId) => {
+        const instrument = getInstrument(instrumentId);
+        if (!instrument) { setError("Instrument not found"); return; }
+
+        const symbol = instrument.contract_month || instrument.symbol;
+        setFetchingPrice(prev => ({ ...prev, [orderId]: true }));
+        clearAlerts();
+        try {
+            const result = await strategyApi.lastPrice(symbol);
+            setEntryPrices(prev => ({ ...prev, [orderId]: String(result.last_price) }));
+            setSuccess(`Last price for ${symbol}: $${result.last_price}${result.bid ? ` (Bid: $${result.bid}, Ask: $${result.ask})` : ""}`);
+        } catch (err) {
+            setError(`Could not fetch price: ${err.message}`);
+        } finally {
+            setFetchingPrice(prev => ({ ...prev, [orderId]: false }));
         }
     };
 
@@ -273,6 +298,13 @@ export default function StrategyPanel() {
     const stoppedOrders = orders.filter((o) => o.status === "STOPPED");
     const disabledOrders = orders.filter((o) => o.status === "DISABLED");
 
+    // Trade filtering for Active vs Past
+    const activeTrades = trades.filter(t => t.status === "OPEN");
+    const pastTrades = trades.filter(t => t.status !== "OPEN");
+
+    // Check for any error trades
+    const errorTrades = trades.filter(t => t.broker_status && (t.broker_status.startsWith("ERROR") || t.broker_status.startsWith("LOGIN_FAILED")));
+
     // ── Status badge helper ──────────────────────────────
     const StatusBadge = ({ status }) => {
         const cls = {
@@ -285,7 +317,6 @@ export default function StrategyPanel() {
         return <span className={`status-badge ${cls[status] || ""}`}>{status}</span>;
     };
 
-    // ── P&L display helper ──────────────────────────────
     const PnlValue = ({ value }) => {
         if (value === undefined || value === null) return <span style={{ color: 'var(--gray-500)' }}>—</span>;
         const isPositive = value > 0;
@@ -310,6 +341,7 @@ export default function StrategyPanel() {
         const isDisabled = order.status === "DISABLED";
         const isExecuting = executing[order.id];
         const isFlattening = flattening[order.id];
+        const isFetchPrice = fetchingPrice[order.id];
 
         const group = groups.find((g) => g.id === order.group_id);
         const primaryPodName = group?.pods?.[0] || "Primary";
@@ -328,8 +360,18 @@ export default function StrategyPanel() {
         // Live positions data
         const posData = livePositions[order.id]?.positions || [];
 
+        // Error indicator
+        const orderErrorTrades = trades.filter(t => t.group_order_id === order.id && t.broker_status && (t.broker_status.startsWith("ERROR") || t.broker_status.startsWith("LOGIN_FAILED")));
+
         return (
             <div key={order.id} className={`order-card order-${order.status.toLowerCase()}`}>
+                {/* Error banner for this order */}
+                {orderErrorTrades.length > 0 && (
+                    <div style={{ padding: '8px 12px', margin: '0 0 12px 0', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '6px', fontSize: '13px', color: '#ef4444' }}>
+                        ⚠️ {orderErrorTrades.length} order(s) failed — {orderErrorTrades[0].broker_status}
+                    </div>
+                )}
+
                 {/* Top bar */}
                 <div className="order-card-top" style={{ flexWrap: 'wrap', gap: '10px' }}>
                     <div className="order-info" style={{ flex: '1 1 auto', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
@@ -350,18 +392,15 @@ export default function StrategyPanel() {
                     <div className="order-controls">
                         {isIdle && (
                             <>
-                                <button className="btn btn-sm btn-execute" onClick={() => handleExecute(order.id)} disabled={isExecuting}>
-                                    {isExecuting ? "⏳ Placing…" : "▶ Execute"}
-                                </button>
                                 <button className="btn btn-sm btn-edit" onClick={() => openEditModal(order)}>✏️ Edit</button>
                                 <button className="btn btn-sm btn-stop-sm" onClick={() => handleDelete(order.id)}>🗑️ Delete</button>
                             </>
                         )}
                         {isRunning && (
                             <>
-                                <button className="btn btn-sm btn-execute" onClick={() => handleExecute(order.id)} disabled={isExecuting}>
-                                    {isExecuting ? "⏳ Placing…" : "▶ Execute"}
-                                </button>
+                                <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#22c55e', background: 'rgba(34,197,94,0.1)', padding: '4px 12px', borderRadius: '6px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                    <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#22c55e', animation: 'pulse 1.5s ease-in-out infinite' }} /> Running
+                                </span>
                                 <button className="btn btn-sm btn-flatten" onClick={() => handleFlatten(order.id)} disabled={isFlattening}
                                     style={{ background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>
                                     {isFlattening ? "🔴 Flattening…" : "🔴 Flatten All"}
@@ -393,7 +432,7 @@ export default function StrategyPanel() {
                                 <button className="btn btn-sm btn-stop-sm" onClick={() => handleDelete(order.id)}>🗑️ Delete</button>
                             </>
                         )}
-                        <button className="btn btn-sm btn-edit" onClick={() => openEditModal(order)}>✏️ Edit</button>
+                        <button className="btn btn-sm btn-edit" onClick={() => openEditModal(order)}>✏️</button>
                         <button
                             className={`btn btn-sm ${selectedOrderId === order.id ? "btn-selected" : ""}`}
                             onClick={() => setSelectedOrderId(selectedOrderId === order.id ? null : order.id)}
@@ -401,6 +440,38 @@ export default function StrategyPanel() {
                         >📋</button>
                     </div>
                 </div>
+
+                {/* Price Input + Execute (only for IDLE) */}
+                {isIdle && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '14px', padding: '14px', background: 'rgba(59,130,246,0.06)', borderRadius: '8px', border: '1px solid rgba(59,130,246,0.15)' }}>
+                        <span style={{ fontSize: '13px', fontWeight: '600', color: '#3b82f6', whiteSpace: 'nowrap' }}>Entry Price:</span>
+                        <input
+                            type="number"
+                            step="0.25"
+                            value={entryPrices[order.id] || ""}
+                            onChange={(e) => setEntryPrices(prev => ({ ...prev, [order.id]: e.target.value }))}
+                            placeholder="Leave empty for Market order"
+                            style={{ flex: '1', maxWidth: '200px', padding: '8px 12px', fontSize: '14px', fontFamily: 'monospace', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', color: 'var(--gray-100)', outline: 'none' }}
+                        />
+                        <button
+                            className="btn btn-sm"
+                            onClick={() => handleGetLastPrice(order.id, order.instrument_id)}
+                            disabled={isFetchPrice}
+                            style={{ background: 'rgba(250,204,21,0.1)', color: '#facc15', border: '1px solid rgba(250,204,21,0.25)', whiteSpace: 'nowrap', fontSize: '12px', padding: '8px 12px' }}
+                        >
+                            {isFetchPrice ? "⏳ Fetching…" : "📡 Get Last Price"}
+                        </button>
+                        <span style={{ color: 'var(--gray-500)', fontSize: '12px' }}>|</span>
+                        <button
+                            className="btn btn-sm btn-execute"
+                            onClick={() => handleExecute(order.id)}
+                            disabled={isExecuting}
+                            style={{ padding: '8px 20px', fontSize: '14px', fontWeight: 'bold' }}
+                        >
+                            {isExecuting ? "⏳ Placing…" : entryPrices[order.id] ? `▶ Execute @ $${entryPrices[order.id]}` : "▶ Execute (Market)"}
+                        </button>
+                    </div>
+                )}
 
                 {/* Strategy Details Layout */}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', marginTop: '16px', padding: '16px', background: 'rgba(0,0,0,0.15)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
@@ -648,12 +719,12 @@ export default function StrategyPanel() {
             {/* HedgeX Tab Content */}
             {activeTab === 'hedgex' && (
                 <>
-                    {/* Idle Strategies (new — ready to execute) */}
+                    {/* Idle Strategies (ready to execute) */}
                     {idleOrders.length > 0 && (
                         <div className="strat-section">
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <h3 className="section-title">⏳ Ready ({idleOrders.length})</h3>
-                                <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Strategies waiting for execution. Review settings, then click ▶ Execute.</p>
+                                <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Enter a price (or leave empty for Market), then click ▶ Execute.</p>
                             </div>
                             {idleOrders.map(renderOrderCard)}
                         </div>
@@ -663,7 +734,6 @@ export default function StrategyPanel() {
                     <div className="strat-section">
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <h3 className="section-title">Active ({activeOrders.length})</h3>
-                            <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>HedgeX executes synchronized dual-pod trades based on the group's pod assignments.</p>
                         </div>
                         {activeOrders.length === 0 && idleOrders.length === 0 && (
                             <div className="zone-empty">No strategies yet. Click "➕ Add Strategy" to get started.</div>
@@ -671,12 +741,37 @@ export default function StrategyPanel() {
                         {activeOrders.map(renderOrderCard)}
                     </div>
 
-                    {/* Trade Log */}
+                    {/* Trade Log with Active/Past tabs */}
                     {selectedOrderId && (
                         <div className="strat-section">
-                            <h3 className="section-title">
-                                Trades — {getGroupName(orders.find(o => o.id === selectedOrderId)?.group_id)} / {getInstrument(orders.find(o => o.id === selectedOrderId)?.instrument_id)?.symbol}
-                            </h3>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                <h3 className="section-title" style={{ margin: 0 }}>
+                                    Trades — {getGroupName(orders.find(o => o.id === selectedOrderId)?.group_id)} / {getInstrument(orders.find(o => o.id === selectedOrderId)?.instrument_id)?.symbol}
+                                </h3>
+                                <div style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', padding: '3px' }}>
+                                    <button
+                                        onClick={() => setTradeTab("active")}
+                                        style={{
+                                            padding: '6px 16px', fontSize: '13px', fontWeight: '600', borderRadius: '6px', border: 'none', cursor: 'pointer', transition: 'all 0.2s',
+                                            background: tradeTab === 'active' ? 'rgba(34,197,94,0.15)' : 'transparent',
+                                            color: tradeTab === 'active' ? '#22c55e' : 'var(--gray-400)',
+                                        }}
+                                    >
+                                        🟢 Active ({activeTrades.length})
+                                    </button>
+                                    <button
+                                        onClick={() => setTradeTab("history")}
+                                        style={{
+                                            padding: '6px 16px', fontSize: '13px', fontWeight: '600', borderRadius: '6px', border: 'none', cursor: 'pointer', transition: 'all 0.2s',
+                                            background: tradeTab === 'history' ? 'rgba(156,163,175,0.15)' : 'transparent',
+                                            color: tradeTab === 'history' ? 'var(--gray-200)' : 'var(--gray-400)',
+                                        }}
+                                    >
+                                        📜 History ({pastTrades.length})
+                                    </button>
+                                </div>
+                            </div>
+
                             <div className="table-container">
                                 <table className="data-table">
                                     <thead>
@@ -688,25 +783,47 @@ export default function StrategyPanel() {
                                             <th>Price</th>
                                             <th>TP</th>
                                             <th>SL</th>
+                                            <th>Broker Order</th>
                                             <th>Status</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {trades.length === 0 && (
-                                            <tr><td colSpan="8" className="empty-state">No trades yet. Execute the strategy.</td></tr>
+                                        {(tradeTab === "active" ? activeTrades : pastTrades).length === 0 && (
+                                            <tr><td colSpan="9" className="empty-state">
+                                                {tradeTab === "active"
+                                                    ? "No active trades. Orders will appear here when the strategy is running."
+                                                    : "No historical trades yet."
+                                                }
+                                            </td></tr>
                                         )}
-                                        {trades.map((t) => {
+                                        {(tradeTab === "active" ? activeTrades : pastTrades).map((t) => {
                                             const member = groups.flatMap(g => g.members || []).find(m => m.account_id === t.account_id);
+                                            const isError = t.broker_status && (t.broker_status.startsWith("ERROR") || t.broker_status.startsWith("LOGIN_FAILED") || t.broker_status.startsWith("MISSING"));
                                             return (
-                                                <tr key={t.id}>
+                                                <tr key={t.id} style={isError ? { background: 'rgba(239,68,68,0.05)' } : {}}>
                                                     <td className="time-cell">{new Date(t.timestamp).toLocaleTimeString()}</td>
                                                     <td>{member?.account_name || `#${t.account_id}`}</td>
                                                     <td><span className={`badge ${t.side === "LONG" ? "badge-long" : "badge-short"}`}>{t.side}</span></td>
                                                     <td>{t.quantity}</td>
-                                                    <td>${t.entry_price.toFixed(2)}</td>
+                                                    <td style={{ fontFamily: 'monospace' }}>${t.entry_price.toFixed(2)}</td>
                                                     <td className="ptsl-tp">{t.profit_target ?? "—"}</td>
                                                     <td className="ptsl-sl">{t.stop_loss ?? "—"}</td>
-                                                    <td><span className="badge badge-neutral">{t.status}</span></td>
+                                                    <td style={{ fontSize: '12px' }}>
+                                                        {t.broker_order_id ? (
+                                                            <span style={{ fontFamily: 'monospace', color: isError ? '#ef4444' : 'var(--gray-300)' }}>
+                                                                #{t.broker_order_id}
+                                                            </span>
+                                                        ) : "—"}
+                                                    </td>
+                                                    <td>
+                                                        {isError ? (
+                                                            <span className="badge" style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }} title={t.broker_status}>
+                                                                ⚠ {t.broker_status.substring(0, 30)}{t.broker_status.length > 30 ? "…" : ""}
+                                                            </span>
+                                                        ) : (
+                                                            <span className={`badge ${t.status === "OPEN" ? "badge-running" : "badge-neutral"}`}>{t.status}</span>
+                                                        )}
+                                                    </td>
                                                 </tr>
                                             );
                                         })}

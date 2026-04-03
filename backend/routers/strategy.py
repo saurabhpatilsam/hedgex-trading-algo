@@ -129,8 +129,12 @@ def edit_group_order(order_id: int, payload: GroupOrderUpdate, db: Session = Dep
 
 
 @router.post("/execute/{order_id}")
-def execute_group_hedge(order_id: int, db: Session = Depends(get_db)):
-    """Execute one hedge cycle for an IDLE or RUNNING group strategy."""
+def execute_group_hedge(order_id: int, price: float = None, db: Session = Depends(get_db)):
+    """Execute one hedge cycle for an IDLE or RUNNING group strategy.
+    
+    Args:
+        price: Optional limit price. If set, places Limit orders. If None, Market orders.
+    """
     order = db.query(GroupOrder).filter(GroupOrder.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="GroupOrder not found")
@@ -146,8 +150,32 @@ def execute_group_hedge(order_id: int, db: Session = Depends(get_db)):
         order.started_at = datetime.now(timezone.utc)
         db.commit()
 
-    trades = HedgingEngine.execute_group_order(db, order_id)
+    trades = HedgingEngine.execute_group_order(db, order_id, entry_price=price)
     return {"message": f"Executed {len(trades)} trades", "trades": trades}
+
+
+@router.get("/last-price")
+def get_last_price(symbol: str, db: Session = Depends(get_db)):
+    """Get the last traded price for a symbol via Tradovate."""
+    from models import User, BrokerCredential
+    from required_api.tradovate_client import get_proxied_client
+
+    # Find any user with credentials to use for the API call
+    cred = db.query(BrokerCredential).filter(BrokerCredential.is_active == True).first()
+    if not cred:
+        raise HTTPException(status_code=400, detail="No active broker credentials found")
+
+    user = db.query(User).filter(User.id == cred.user_id).first()
+    client = get_proxied_client(user=user)
+    token, err = client.login(cred.login_id, cred.password)
+    if not token:
+        raise HTTPException(status_code=500, detail=f"Login failed: {err}")
+
+    try:
+        result = client.get_last_price(symbol)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/orders", response_model=list[GroupOrderResponse])

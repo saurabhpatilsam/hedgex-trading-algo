@@ -148,13 +148,14 @@ class HedgingEngine:
         return client, None
 
     @staticmethod
-    def execute_group_order(db: Session, order_id: int) -> list[dict]:
+    def execute_group_order(db: Session, order_id: int, entry_price: float = None) -> list[dict]:
         """
         Execute one hedge cycle for a GroupOrder:
         - POT-L accounts get the configured direction
         - POT-S accounts get the opposite direction
         - Each trade gets its pot-specific PT/SL
         - Orders are placed via real Tradovate API calls
+        - If entry_price is set, places Limit orders; otherwise Market orders
         """
         order = db.query(GroupOrder).filter(GroupOrder.id == order_id).first()
         if not order:
@@ -233,12 +234,15 @@ class HedgingEngine:
                 logger.error(error_msg)
             else:
                 try:
+                    order_type = "Limit" if entry_price else "Market"
                     result = client.place_order(
                         account_id=account.tradovate_account_id,
                         account_spec=account.name,
                         symbol=contract_symbol,
                         action=action,
                         qty=order.quantity,
+                        order_type=order_type,
+                        price=entry_price,
                     )
                     # Extract order details from response
                     order_info = result.get("orderId") or result.get("id")

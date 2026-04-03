@@ -114,14 +114,19 @@ export const strategyApi = {
         request(`/strategy/enable/${orderId}`, { method: "POST" }),
     edit: (orderId, data) =>
         request(`/strategy/orders/${orderId}`, { method: "PUT", body: JSON.stringify(data) }),
-    execute: (orderId) =>
-        request(`/strategy/execute/${orderId}`, { method: "POST" }),
+    execute: (orderId, price = null) => {
+        let url = `/strategy/execute/${orderId}`;
+        if (price != null) url += `?price=${price}`;
+        return request(url, { method: "POST" });
+    },
     delete: (orderId) =>
         request(`/strategy/orders/${orderId}`, { method: "DELETE" }),
     flatten: (orderId) =>
         request(`/strategy/orders/${orderId}/flatten`, { method: "POST" }),
     positions: (orderId) =>
         request(`/strategy/orders/${orderId}/positions`),
+    lastPrice: (symbol) =>
+        request(`/strategy/last-price?symbol=${encodeURIComponent(symbol)}`),
     orders: () => request("/strategy/orders"),
     getOrder: (id) => request(`/strategy/orders/${id}`),
     trades: (limit = 50, groupOrderId = null) => {

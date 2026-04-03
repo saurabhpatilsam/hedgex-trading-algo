@@ -441,6 +441,7 @@ class TradovateClient:
         action: str,
         qty: int = 1,
         order_type: str = "Market",
+        price: float = None,
     ) -> Dict[str, Any]:
         """
         Place an order via Tradovate API.
@@ -452,6 +453,7 @@ class TradovateClient:
             action: 'Buy' or 'Sell'
             qty: Order quantity (number of contracts)
             order_type: 'Market', 'Limit', 'Stop', etc.
+            price: Limit/Stop price (required for Limit/Stop orders)
         
         Returns: Order response dict from Tradovate
         """
@@ -474,7 +476,11 @@ class TradovateClient:
             "isAutomated": True,
         }
 
-        logger.info(f"Placing order: {action} {qty}x {symbol} on account {account_spec} (id={account_id})")
+        # Add price for Limit/Stop orders
+        if price is not None and order_type in ("Limit", "Stop", "StopLimit"):
+            payload["price"] = price
+
+        logger.info(f"Placing order: {action} {qty}x {symbol} @ {'$' + str(price) if price else 'MKT'} on account {account_spec} (id={account_id})")
 
         try:
             response = self._proxied_request("POST", url, headers=headers, json_body=payload, timeout=30)
@@ -490,6 +496,115 @@ class TradovateClient:
             except Exception:
                 error_detail = {}
             raise RuntimeError(f"Order placement failed: {e}. Details: {error_detail}")
+
+    def get_last_price(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get the last traded price for a symbol via Tradovate WebSocket.
+        
+        Opens a quick WebSocket connection to md.tradovateapi.com,
+        subscribes to quotes, gets the first tick, and disconnects.
+        
+        Args:
+            symbol: Contract symbol (e.g. 'NQM6')
+            
+        Returns: { "symbol": str, "last_price": float, "bid": float, "ask": float }
+        """
+        import websocket
+        import json as json_mod
+        import time
+        import threading
+
+        if not self.access_token:
+            raise ValueError("Not authenticated.")
+
+        # 1. Find contract ID via REST
+        find_url = f"https://demo.tradovateapi.com/v1/contract/find?name={symbol}"
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Accept": "application/json",
+        }
+        try:
+            resp = self._proxied_request("GET", find_url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            contract = resp.json()
+            contract_id = contract.get("id")
+            if not contract_id:
+                raise ValueError(f"Contract not found for symbol: {symbol}")
+        except Exception as e:
+            logger.error(f"Error finding contract {symbol}: {e}")
+            raise
+
+        # 2. Quick WebSocket quote fetch
+        result = {"symbol": symbol, "last_price": None, "bid": None, "ask": None}
+        got_price = threading.Event()
+        ws_errors = []
+
+        def on_message(ws, message):
+            try:
+                # Tradovate WS messages have format: "type\nid\nbody"
+                parts = message.split("\n", 2)
+                if len(parts) >= 3:
+                    msg_type = parts[0].strip()
+                    body = parts[2].strip() if parts[2].strip() else "{}"
+                    if body.startswith("{") or body.startswith("["):
+                        data = json_mod.loads(body)
+                        # Quote data has entries with Trade, Bid, Ask
+                        entries = data.get("entries", {}) if isinstance(data, dict) else {}
+                        if "Trade" in entries:
+                            result["last_price"] = entries["Trade"].get("price")
+                        if "Bid" in entries:
+                            result["bid"] = entries["Bid"].get("price")
+                        if "Ask" in entries:
+                            result["ask"] = entries["Ask"].get("price")
+                        if result["last_price"] is not None or result["bid"] is not None:
+                            got_price.set()
+            except Exception as e:
+                logger.debug(f"WS parse error: {e}")
+
+        def on_open(ws):
+            # Authorize
+            auth_msg = f"authorize\n1\n\n{self.access_token}"
+            ws.send(auth_msg)
+            # Subscribe to quote after short delay
+            time.sleep(0.3)
+            sub_msg = f"md/subscribeQuote\n2\n\n{{\"symbol\": \"{symbol}\"}}"
+            ws.send(sub_msg)
+
+        def on_error(ws, error):
+            ws_errors.append(str(error))
+            got_price.set()
+
+        ws_url = "wss://md.tradovateapi.com/v1/websocket"
+        ws = websocket.WebSocketApp(
+            ws_url,
+            on_message=on_message,
+            on_open=on_open,
+            on_error=on_error,
+        )
+
+        ws_thread = threading.Thread(target=ws.run_forever, kwargs={"ping_interval": 0})
+        ws_thread.daemon = True
+        ws_thread.start()
+
+        # Wait up to 5 seconds for a price
+        got_price.wait(timeout=5.0)
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+        if ws_errors:
+            raise RuntimeError(f"WebSocket error: {ws_errors[0]}")
+
+        # Fallback: if no trade price, use bid/ask midpoint
+        if result["last_price"] is None and result["bid"] and result["ask"]:
+            result["last_price"] = round((result["bid"] + result["ask"]) / 2, 4)
+
+        if result["last_price"] is None:
+            raise RuntimeError(f"Could not get price for {symbol} (market may be closed)")
+
+        logger.info(f"Last price for {symbol}: {result['last_price']}")
+        return result
 
     def cancel_order(self, order_id: int) -> Dict[str, Any]:
         """
