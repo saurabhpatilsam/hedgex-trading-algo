@@ -171,145 +171,147 @@ export default function TradingDashboard() {
         return () => clearInterval(fallback);
     }, [sseConnected]);
 
-    // ── Price Ticker Component ───────────────────────────
-    const PriceTicker = () => {
-        const symbols = Object.keys(livePrices);
-        if (symbols.length === 0) {
-            return (
-                <div className="price-ticker-bar" style={{
-                    display: 'flex', alignItems: 'center', gap: '16px',
-                    padding: '16px 24px', marginBottom: '20px',
-                    background: 'linear-gradient(135deg, rgba(17,24,39,0.9) 0%, rgba(30,41,59,0.9) 100%)',
-                    borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)',
-                }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: mdStatus?.state === 'connected' ? '#22c55e' : '#ef4444', boxShadow: mdStatus?.state === 'connected' ? '0 0 6px #22c55e' : '0 0 6px #ef4444' }} />
-                        <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--gray-300)', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                            📡 Live Prices
-                        </span>
-                    </div>
-                    <span style={{ fontSize: '13px', color: 'var(--gray-500)' }}>
-                        {mdStatus?.state === 'connected'
-                            ? 'Waiting for market data...'
-                            : 'Market data service offline — prices will appear when markets are open'}
-                    </span>
-                </div>
-            );
-        }
+    // ── Instrument Cards Component ──────────────────────
+    const InstrumentCards = () => {
+        // Get all instruments from MD status or from livePrices
+        const mdSymbols = mdStatus?.symbols || [];
+        const priceSymbols = Object.keys(livePrices);
+        const allSymbols = [...new Set([...mdSymbols, ...priceSymbols])].sort();
+
+        if (allSymbols.length === 0) return null;
 
         return (
-            <div className="price-ticker-bar" style={{
-                display: 'flex', flexDirection: 'column', gap: '12px',
-                padding: '16px 24px', marginBottom: '20px',
-                background: 'linear-gradient(135deg, rgba(17,24,39,0.95) 0%, rgba(30,41,59,0.95) 100%)',
-                borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)',
-                boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
+            <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+                gap: '14px',
+                marginBottom: '20px',
             }}>
-                {/* Header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <span style={{
-                            width: '8px', height: '8px', borderRadius: '50%',
-                            background: sseConnected ? '#22c55e' : '#facc15',
-                            boxShadow: sseConnected ? '0 0 8px #22c55e' : '0 0 8px #facc15',
-                            animation: sseConnected ? 'pulse 2s ease-in-out infinite' : 'none',
-                        }} />
-                        <span style={{ fontSize: '13px', fontWeight: '700', color: 'var(--gray-200)', textTransform: 'uppercase', letterSpacing: '1.5px' }}>
-                            📡 Live Market Prices
-                        </span>
-                        <span style={{ fontSize: '11px', color: 'var(--gray-500)', fontFamily: 'monospace' }}>
-                            {sseConnected ? 'STREAMING' : 'POLLING'}
-                        </span>
-                    </div>
-                    <span style={{ fontSize: '11px', color: 'var(--gray-500)' }}>
-                        {symbols.length} instrument{symbols.length !== 1 ? 's' : ''}
-                    </span>
-                </div>
+                {allSymbols.map(symbol => {
+                    const tick = livePrices[symbol];
+                    const price = tick?.price ?? tick?.bid ?? null;
+                    const change = tick?.change ?? 0;
+                    const isUp = change > 0;
+                    const isDown = change < 0;
+                    const isFlashing = flashSymbol === symbol;
 
-                {/* Price Cards */}
-                <div style={{
-                    display: 'flex', gap: '12px', flexWrap: 'wrap',
-                    overflowX: 'auto', paddingBottom: '4px',
-                }}>
-                    {symbols.sort().map(symbol => {
-                        const tick = livePrices[symbol];
-                        const price = tick?.price ?? tick?.bid ?? null;
-                        const change = tick?.change ?? 0;
-                        const isUp = change > 0;
-                        const isDown = change < 0;
-                        const isFlashing = flashSymbol === symbol;
+                    // Status: green = receiving ticks, yellow = connected but no data, red = disconnected
+                    let statusColor, statusGlow, statusLabel;
+                    if (price != null) {
+                        statusColor = '#22c55e';
+                        statusGlow = '0 0 8px #22c55e';
+                        statusLabel = 'Live';
+                    } else if (mdStatus?.state === 'connected') {
+                        statusColor = '#facc15';
+                        statusGlow = '0 0 8px #facc15';
+                        statusLabel = 'Waiting';
+                    } else {
+                        statusColor = '#ef4444';
+                        statusGlow = '0 0 8px #ef4444';
+                        statusLabel = 'Offline';
+                    }
 
-                        return (
-                            <div key={symbol} style={{
-                                flex: '1 1 160px', minWidth: '160px', maxWidth: '220px',
-                                padding: '14px 16px',
-                                background: isFlashing
-                                    ? (isUp ? 'rgba(34,197,94,0.12)' : isDown ? 'rgba(239,68,68,0.12)' : 'rgba(59,130,246,0.08)')
-                                    : 'rgba(255,255,255,0.03)',
-                                borderRadius: '10px',
-                                border: `1px solid ${isFlashing
-                                    ? (isUp ? 'rgba(34,197,94,0.3)' : isDown ? 'rgba(239,68,68,0.3)' : 'rgba(59,130,246,0.15)')
-                                    : 'rgba(255,255,255,0.06)'}`,
-                                transition: 'all 0.15s ease',
-                            }}>
-                                {/* Symbol */}
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                                    <span style={{ fontSize: '14px', fontWeight: '800', color: 'var(--gray-100)', letterSpacing: '0.5px' }}>
-                                        {symbol}
-                                    </span>
-                                    {change !== 0 && (
-                                        <span style={{
-                                            fontSize: '11px', fontWeight: '700', fontFamily: 'monospace',
-                                            color: isUp ? '#22c55e' : '#ef4444',
-                                            background: isUp ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
-                                            padding: '2px 6px', borderRadius: '4px',
-                                        }}>
-                                            {isUp ? '▲' : '▼'} {Math.abs(change).toFixed(2)}
-                                        </span>
-                                    )}
-                                </div>
-
-                                {/* Price */}
-                                <div style={{
-                                    fontSize: '22px', fontWeight: '800', fontFamily: 'monospace',
-                                    color: isUp ? '#22c55e' : isDown ? '#ef4444' : 'var(--gray-100)',
-                                    lineHeight: '1.2', marginBottom: '6px',
-                                    transition: 'color 0.2s',
+                    return (
+                        <div key={symbol} style={{
+                            padding: '18px 16px',
+                            background: isFlashing
+                                ? (isUp ? 'rgba(34,197,94,0.12)' : isDown ? 'rgba(239,68,68,0.12)' : 'rgba(59,130,246,0.08)')
+                                : 'linear-gradient(145deg, rgba(17,24,39,0.95) 0%, rgba(30,41,59,0.9) 100%)',
+                            borderRadius: '12px',
+                            border: `1px solid ${isFlashing
+                                ? (isUp ? 'rgba(34,197,94,0.4)' : isDown ? 'rgba(239,68,68,0.4)' : 'rgba(59,130,246,0.2)')
+                                : 'rgba(255,255,255,0.06)'}`,
+                            transition: 'all 0.2s ease',
+                            boxShadow: isFlashing ? '0 0 20px rgba(59,130,246,0.1)' : '0 2px 12px rgba(0,0,0,0.2)',
+                        }}>
+                            {/* Header: Symbol + Status Dot */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                <span style={{
+                                    fontSize: '15px', fontWeight: '800', color: '#fff',
+                                    letterSpacing: '0.5px',
                                 }}>
-                                    {price != null ? price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                                    {symbol}
+                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <span style={{
+                                        width: '9px', height: '9px', borderRadius: '50%',
+                                        background: statusColor, boxShadow: statusGlow,
+                                        display: 'inline-block',
+                                        animation: price != null ? 'pulse 2s ease-in-out infinite' : 'none',
+                                    }} />
+                                    <span style={{
+                                        fontSize: '10px', fontWeight: '600', color: statusColor,
+                                        textTransform: 'uppercase', letterSpacing: '0.5px',
+                                    }}>
+                                        {statusLabel}
+                                    </span>
                                 </div>
-
-                                {/* Bid/Ask */}
-                                {(tick?.bid || tick?.ask) && (
-                                    <div style={{ display: 'flex', gap: '8px', fontSize: '11px', color: 'var(--gray-500)', fontFamily: 'monospace' }}>
-                                        {tick.bid && <span>B: {tick.bid.toFixed(2)}</span>}
-                                        {tick.ask && <span>A: {tick.ask.toFixed(2)}</span>}
-                                        {tick.bid && tick.ask && (
-                                            <span style={{ color: 'var(--gray-600)' }}>
-                                                Spd: {(tick.ask - tick.bid).toFixed(2)}
-                                            </span>
-                                        )}
-                                    </div>
-                                )}
-
-                                {/* Volume */}
-                                {tick?.volume != null && (
-                                    <div style={{ fontSize: '11px', color: 'var(--gray-500)', marginTop: '4px' }}>
-                                        Vol: {tick.volume.toLocaleString()}
-                                    </div>
-                                )}
                             </div>
-                        );
-                    })}
-                </div>
+
+                            {/* Price */}
+                            <div style={{
+                                fontSize: '24px', fontWeight: '800', fontFamily: 'monospace',
+                                color: price != null ? (isUp ? '#22c55e' : isDown ? '#ef4444' : '#fff') : 'var(--gray-500)',
+                                lineHeight: '1.2', marginBottom: '8px',
+                                transition: 'color 0.2s',
+                            }}>
+                                {price != null
+                                    ? price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                                    : '—'}
+                            </div>
+
+                            {/* Change Badge */}
+                            {change !== 0 && (
+                                <div style={{ marginBottom: '8px' }}>
+                                    <span style={{
+                                        fontSize: '11px', fontWeight: '700', fontFamily: 'monospace',
+                                        color: isUp ? '#22c55e' : '#ef4444',
+                                        background: isUp ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+                                        padding: '3px 8px', borderRadius: '6px',
+                                    }}>
+                                        {isUp ? '▲' : '▼'} {Math.abs(change).toFixed(2)}
+                                    </span>
+                                </div>
+                            )}
+
+                            {/* Bid/Ask */}
+                            {(tick?.bid || tick?.ask) && (
+                                <div style={{
+                                    display: 'flex', gap: '8px', fontSize: '11px',
+                                    color: 'var(--gray-400)', fontFamily: 'monospace',
+                                }}>
+                                    {tick.bid && <span>B: {tick.bid.toFixed(2)}</span>}
+                                    {tick.ask && <span>A: {tick.ask.toFixed(2)}</span>}
+                                </div>
+                            )}
+
+                            {/* Volume */}
+                            {tick?.volume != null && (
+                                <div style={{
+                                    fontSize: '11px', color: 'var(--gray-500)', marginTop: '4px',
+                                    fontFamily: 'monospace',
+                                }}>
+                                    Vol: {tick.volume.toLocaleString()}
+                                </div>
+                            )}
+
+                            {/* No data message */}
+                            {price == null && (
+                                <div style={{ fontSize: '11px', color: 'var(--gray-600)', marginTop: '4px' }}>
+                                    {mdStatus?.state === 'connected'
+                                        ? 'Markets closed'
+                                        : 'Service offline'}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
             </div>
         );
     };
 
     return (
         <div className="trading-dashboard">
-            {/* ── Live Price Ticker ────────────────────── */}
-            <PriceTicker />
             <div className="kill-banner">
                 <div className="kill-banner-left">
                     <h2 className="kill-title">⚡ Trading Command Center</h2>
@@ -386,6 +388,9 @@ export default function TradingDashboard() {
                     )}
                 </div>
             )}
+
+            {/* ── Live Instrument Cards ───────────────────── */}
+            <InstrumentCards />
 
             {/* ── Navigation Tabs ────────────────────────── */}
             <div className="td-tabs">
