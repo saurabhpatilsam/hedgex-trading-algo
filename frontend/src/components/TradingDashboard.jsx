@@ -172,13 +172,14 @@ export default function TradingDashboard() {
     }, [sseConnected]);
 
     // ── Instrument Cards Component ──────────────────────
+    const FALLBACK_INSTRUMENTS = ['ESH6', 'GCG6', 'MESH6', 'MGCG6', 'MNQH6', 'NQH6'];
+
     const InstrumentCards = () => {
-        // Get all instruments from MD status or from livePrices
+        // Get all instruments from MD status, livePrices, or fallback
         const mdSymbols = mdStatus?.symbols || [];
         const priceSymbols = Object.keys(livePrices);
-        const allSymbols = [...new Set([...mdSymbols, ...priceSymbols])].sort();
-
-        if (allSymbols.length === 0) return null;
+        const combined = [...new Set([...mdSymbols, ...priceSymbols])];
+        const allSymbols = (combined.length > 0 ? combined : FALLBACK_INSTRUMENTS).sort();
 
         return (
             <div style={{
