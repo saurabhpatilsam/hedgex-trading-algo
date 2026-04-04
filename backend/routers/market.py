@@ -10,6 +10,7 @@ Endpoints:
 import asyncio
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import redis
@@ -20,8 +21,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/market", tags=["market-live"])
 
-# Redis connection (lazy init)
+# Redis connection (lazy init) with timeouts
 _redis = None
+_executor = ThreadPoolExecutor(max_workers=2)
 
 
 def get_redis():
@@ -40,11 +42,11 @@ def get_redis():
 
 
 @router.get("/prices")
-def get_all_prices():
+async def get_all_prices():
     """Get the latest price for every instrument from Redis."""
-    r = get_redis()
+    loop = asyncio.get_event_loop()
     try:
-        raw = r.hgetall("hx:prices")
+        raw = await loop.run_in_executor(_executor, lambda: get_redis().hgetall("hx:prices"))
         prices = {}
         for symbol, tick_json in raw.items():
             try:
@@ -52,7 +54,7 @@ def get_all_prices():
             except json.JSONDecodeError:
                 prices[symbol] = {"symbol": symbol, "error": "invalid_data"}
         return {"prices": prices, "count": len(prices)}
-    except redis.RedisError as e:
+    except Exception as e:
         logger.error(f"Redis error fetching prices: {e}")
         return {"prices": {}, "count": 0, "error": str(e)}
 
@@ -65,34 +67,48 @@ async def stream_prices():
     """
     Server-Sent Events stream of real-time tick data.
 
+    Uses run_in_executor to avoid blocking the async event loop.
     Frontend connects via EventSource('/api/market/stream').
-    Each event is a JSON tick with: symbol, price, bid, ask, volume, change.
     """
     async def event_generator():
         r = get_redis()
         pubsub = r.pubsub()
         pubsub.subscribe("hx:ticks")
+        loop = asyncio.get_event_loop()
 
         try:
             # Send initial snapshot as first event
-            all_prices = r.hgetall("hx:prices")
+            all_prices = await loop.run_in_executor(
+                _executor, lambda: r.hgetall("hx:prices")
+            )
             if all_prices:
                 snapshot = {
                     "type": "snapshot",
-                    "prices": {k: json.loads(v) for k, v in all_prices.items()},
+                    "prices": {},
                 }
+                for k, v in all_prices.items():
+                    try:
+                        snapshot["prices"][k] = json.loads(v)
+                    except json.JSONDecodeError:
+                        pass
                 yield f"event: snapshot\ndata: {json.dumps(snapshot)}\n\n"
 
-            # Stream real-time ticks
+            # Stream real-time ticks — non-blocking
             while True:
-                message = pubsub.get_message(timeout=1.0)
+                # Run the blocking pubsub call in a thread
+                message = await loop.run_in_executor(
+                    _executor, lambda: pubsub.get_message(timeout=1.0)
+                )
                 if message and message["type"] == "message":
                     tick_data = message["data"]
                     yield f"event: tick\ndata: {tick_data}\n\n"
                 else:
-                    # Send keepalive comment every second to prevent timeout
+                    # Send keepalive comment to prevent timeout
                     yield ": keepalive\n\n"
-                await asyncio.sleep(0.05)  # Yield control back
+                await asyncio.sleep(0.05)  # Yield control back to event loop
+        except asyncio.CancelledError:
+            # Client disconnected
+            pass
         except Exception as e:
             logger.error(f"SSE stream error: {e}")
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
@@ -118,14 +134,16 @@ async def stream_prices():
 
 
 @router.get("/ticks/{symbol}")
-def get_tick_history(
+async def get_tick_history(
     symbol: str,
     limit: int = Query(100, ge=1, le=1000),
 ):
     """Get recent tick history for a specific symbol."""
-    r = get_redis()
+    loop = asyncio.get_event_loop()
     try:
-        raw_ticks = r.lrange(f"hx:ticks:{symbol}", 0, limit - 1)
+        raw_ticks = await loop.run_in_executor(
+            _executor, lambda: get_redis().lrange(f"hx:ticks:{symbol}", 0, limit - 1)
+        )
         ticks = []
         for t in raw_ticks:
             try:
@@ -133,7 +151,7 @@ def get_tick_history(
             except json.JSONDecodeError:
                 pass
         return {"symbol": symbol, "ticks": ticks, "count": len(ticks)}
-    except redis.RedisError as e:
+    except Exception as e:
         logger.error(f"Redis error fetching tick history: {e}")
         return {"symbol": symbol, "ticks": [], "count": 0, "error": str(e)}
 
@@ -142,13 +160,15 @@ def get_tick_history(
 
 
 @router.get("/status")
-def get_md_status():
+async def get_md_status():
     """Get the market data service health status."""
-    r = get_redis()
+    loop = asyncio.get_event_loop()
     try:
-        status_raw = r.get("hx:md:status")
+        status_raw = await loop.run_in_executor(
+            _executor, lambda: get_redis().get("hx:md:status")
+        )
         if status_raw:
             return json.loads(status_raw)
         return {"state": "unknown", "message": "No status reported by hedgex-md service"}
-    except redis.RedisError as e:
+    except Exception as e:
         return {"state": "error", "error": str(e)}
