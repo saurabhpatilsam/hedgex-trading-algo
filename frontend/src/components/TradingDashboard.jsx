@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { tradingApi } from "../api";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { tradingApi, marketApi } from "../api";
 
 export default function TradingDashboard() {
     const [strategies, setStrategies] = useState([]);
@@ -13,6 +13,14 @@ export default function TradingDashboard() {
     const [killResult, setKillResult] = useState(null);
     const [killConfirm, setKillConfirm] = useState(false);
     const [activeSection, setActiveSection] = useState("overview");
+
+    // Live price ticker state
+    const [livePrices, setLivePrices] = useState({});
+    const [mdStatus, setMdStatus] = useState(null);
+    const [sseConnected, setSseConnected] = useState(false);
+    const [flashSymbol, setFlashSymbol] = useState(null);
+    const eventSourceRef = useRef(null);
+    const flashTimeoutRef = useRef(null);
 
     const refresh = useCallback(async () => {
         setLoading(true);
@@ -98,9 +106,210 @@ export default function TradingDashboard() {
 
     const unreadAlerts = alerts.filter((a) => !a.is_read).length;
 
+    // ── Live Price SSE Connection ────────────────────────
+    useEffect(() => {
+        // Check MD service status
+        marketApi.status().then(setMdStatus).catch(() => { });
+
+        const streamUrl = marketApi.streamUrl();
+        const es = new EventSource(streamUrl);
+        eventSourceRef.current = es;
+
+        es.onopen = () => {
+            setSseConnected(true);
+        };
+
+        es.addEventListener("snapshot", (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                if (data.prices) {
+                    setLivePrices(data.prices);
+                }
+            } catch { }
+        });
+
+        es.addEventListener("tick", (e) => {
+            try {
+                const tick = JSON.parse(e.data);
+                if (tick.symbol) {
+                    setLivePrices(prev => ({
+                        ...prev,
+                        [tick.symbol]: tick,
+                    }));
+                    // Flash effect
+                    setFlashSymbol(tick.symbol);
+                    if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
+                    flashTimeoutRef.current = setTimeout(() => setFlashSymbol(null), 300);
+                }
+            } catch { }
+        });
+
+        es.onerror = () => {
+            setSseConnected(false);
+        };
+
+        // Refresh MD status every 30s
+        const statusInterval = setInterval(() => {
+            marketApi.status().then(setMdStatus).catch(() => { });
+        }, 30000);
+
+        return () => {
+            es.close();
+            clearInterval(statusInterval);
+            if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
+        };
+    }, []);
+
+    // Fallback: if SSE not working, poll prices every 3s
+    useEffect(() => {
+        if (sseConnected) return;
+        const fallback = setInterval(() => {
+            marketApi.prices().then(data => {
+                if (data.prices) setLivePrices(data.prices);
+            }).catch(() => { });
+        }, 3000);
+        return () => clearInterval(fallback);
+    }, [sseConnected]);
+
+    // ── Price Ticker Component ───────────────────────────
+    const PriceTicker = () => {
+        const symbols = Object.keys(livePrices);
+        if (symbols.length === 0) {
+            return (
+                <div className="price-ticker-bar" style={{
+                    display: 'flex', alignItems: 'center', gap: '16px',
+                    padding: '16px 24px', marginBottom: '20px',
+                    background: 'linear-gradient(135deg, rgba(17,24,39,0.9) 0%, rgba(30,41,59,0.9) 100%)',
+                    borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)',
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: mdStatus?.state === 'connected' ? '#22c55e' : '#ef4444', boxShadow: mdStatus?.state === 'connected' ? '0 0 6px #22c55e' : '0 0 6px #ef4444' }} />
+                        <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--gray-300)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                            📡 Live Prices
+                        </span>
+                    </div>
+                    <span style={{ fontSize: '13px', color: 'var(--gray-500)' }}>
+                        {mdStatus?.state === 'connected'
+                            ? 'Waiting for market data...'
+                            : 'Market data service offline — prices will appear when markets are open'}
+                    </span>
+                </div>
+            );
+        }
+
+        return (
+            <div className="price-ticker-bar" style={{
+                display: 'flex', flexDirection: 'column', gap: '12px',
+                padding: '16px 24px', marginBottom: '20px',
+                background: 'linear-gradient(135deg, rgba(17,24,39,0.95) 0%, rgba(30,41,59,0.95) 100%)',
+                borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)',
+                boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
+            }}>
+                {/* Header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{
+                            width: '8px', height: '8px', borderRadius: '50%',
+                            background: sseConnected ? '#22c55e' : '#facc15',
+                            boxShadow: sseConnected ? '0 0 8px #22c55e' : '0 0 8px #facc15',
+                            animation: sseConnected ? 'pulse 2s ease-in-out infinite' : 'none',
+                        }} />
+                        <span style={{ fontSize: '13px', fontWeight: '700', color: 'var(--gray-200)', textTransform: 'uppercase', letterSpacing: '1.5px' }}>
+                            📡 Live Market Prices
+                        </span>
+                        <span style={{ fontSize: '11px', color: 'var(--gray-500)', fontFamily: 'monospace' }}>
+                            {sseConnected ? 'STREAMING' : 'POLLING'}
+                        </span>
+                    </div>
+                    <span style={{ fontSize: '11px', color: 'var(--gray-500)' }}>
+                        {symbols.length} instrument{symbols.length !== 1 ? 's' : ''}
+                    </span>
+                </div>
+
+                {/* Price Cards */}
+                <div style={{
+                    display: 'flex', gap: '12px', flexWrap: 'wrap',
+                    overflowX: 'auto', paddingBottom: '4px',
+                }}>
+                    {symbols.sort().map(symbol => {
+                        const tick = livePrices[symbol];
+                        const price = tick?.price ?? tick?.bid ?? null;
+                        const change = tick?.change ?? 0;
+                        const isUp = change > 0;
+                        const isDown = change < 0;
+                        const isFlashing = flashSymbol === symbol;
+
+                        return (
+                            <div key={symbol} style={{
+                                flex: '1 1 160px', minWidth: '160px', maxWidth: '220px',
+                                padding: '14px 16px',
+                                background: isFlashing
+                                    ? (isUp ? 'rgba(34,197,94,0.12)' : isDown ? 'rgba(239,68,68,0.12)' : 'rgba(59,130,246,0.08)')
+                                    : 'rgba(255,255,255,0.03)',
+                                borderRadius: '10px',
+                                border: `1px solid ${isFlashing
+                                    ? (isUp ? 'rgba(34,197,94,0.3)' : isDown ? 'rgba(239,68,68,0.3)' : 'rgba(59,130,246,0.15)')
+                                    : 'rgba(255,255,255,0.06)'}`,
+                                transition: 'all 0.15s ease',
+                            }}>
+                                {/* Symbol */}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                    <span style={{ fontSize: '14px', fontWeight: '800', color: 'var(--gray-100)', letterSpacing: '0.5px' }}>
+                                        {symbol}
+                                    </span>
+                                    {change !== 0 && (
+                                        <span style={{
+                                            fontSize: '11px', fontWeight: '700', fontFamily: 'monospace',
+                                            color: isUp ? '#22c55e' : '#ef4444',
+                                            background: isUp ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+                                            padding: '2px 6px', borderRadius: '4px',
+                                        }}>
+                                            {isUp ? '▲' : '▼'} {Math.abs(change).toFixed(2)}
+                                        </span>
+                                    )}
+                                </div>
+
+                                {/* Price */}
+                                <div style={{
+                                    fontSize: '22px', fontWeight: '800', fontFamily: 'monospace',
+                                    color: isUp ? '#22c55e' : isDown ? '#ef4444' : 'var(--gray-100)',
+                                    lineHeight: '1.2', marginBottom: '6px',
+                                    transition: 'color 0.2s',
+                                }}>
+                                    {price != null ? price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                                </div>
+
+                                {/* Bid/Ask */}
+                                {(tick?.bid || tick?.ask) && (
+                                    <div style={{ display: 'flex', gap: '8px', fontSize: '11px', color: 'var(--gray-500)', fontFamily: 'monospace' }}>
+                                        {tick.bid && <span>B: {tick.bid.toFixed(2)}</span>}
+                                        {tick.ask && <span>A: {tick.ask.toFixed(2)}</span>}
+                                        {tick.bid && tick.ask && (
+                                            <span style={{ color: 'var(--gray-600)' }}>
+                                                Spd: {(tick.ask - tick.bid).toFixed(2)}
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* Volume */}
+                                {tick?.volume != null && (
+                                    <div style={{ fontSize: '11px', color: 'var(--gray-500)', marginTop: '4px' }}>
+                                        Vol: {tick.volume.toLocaleString()}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div className="trading-dashboard">
-            {/* ── KILL THEM ALL Banner ──────────────────── */}
+            {/* ── Live Price Ticker ────────────────────── */}
+            <PriceTicker />
             <div className="kill-banner">
                 <div className="kill-banner-left">
                     <h2 className="kill-title">⚡ Trading Command Center</h2>

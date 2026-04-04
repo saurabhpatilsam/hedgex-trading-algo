@@ -136,6 +136,15 @@ export const strategyApi = {
     },
 };
 
+// ── Live Market Data ───────────────────────────────────────
+export const marketApi = {
+    prices: () => request("/market/prices"),
+    ticks: (symbol, limit = 100) =>
+        request(`/market/ticks/${encodeURIComponent(symbol)}?limit=${limit}`),
+    status: () => request("/market/status"),
+    streamUrl: () => `${API_BASE}/market/stream`,
+};
+
 // ── Trading System (New) ───────────────────────────────────
 export const tradingApi = {
     // Strategy types
