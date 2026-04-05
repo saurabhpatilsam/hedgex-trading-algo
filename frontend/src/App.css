@@ -4315,51 +4315,63 @@ h6 {
   border-color: var(--accent-primary);
 }
 
-.tp-live-price {
+.tp-inst-left {
+  flex: 1;
+}
+
+.tp-live-price-big {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  user-select: none;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 6px 12px;
+  background: var(--bg-1);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--bg-4);
+  min-width: 140px;
+  transition: all 0.2s var(--ease);
 }
 
-.tp-price-clickable {
+.tp-live-price-big.tp-price-clickable {
   cursor: pointer;
-  padding: 4px 10px;
-  border-radius: var(--radius-xs);
-  border: 1px dashed transparent;
-  transition: all 0.2s;
 }
 
-.tp-price-clickable:hover {
+.tp-live-price-big.tp-price-clickable:hover {
   border-color: var(--accent-primary);
-  background: var(--accent-primary-dim);
+  background: var(--bg-3);
 }
 
-.tp-price-label {
-  font-size: 10px;
+.tp-lpb-label {
+  font-size: 9px;
   color: var(--gray-500);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  font-weight: 600;
+  letter-spacing: 1px;
+  font-weight: 700;
+  margin-bottom: 2px;
 }
 
-.tp-price-value {
+.tp-lpb-value-box {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.tp-lpb-value {
+  font-family: 'JetBrains Mono', monospace;
   font-size: 20px;
   font-weight: 700;
-  font-family: 'JetBrains Mono', monospace;
   color: var(--white);
   transition: color 0.2s;
 }
 
-.tp-price-value.up {
+.tp-lpb-value.up {
   color: var(--accent-green);
 }
 
-.tp-price-value.down {
+.tp-lpb-value.down {
   color: var(--accent-red);
 }
 
-.tp-price-value.flash {
+.tp-lpb-value.flash {
   animation: priceFlash 0.3s ease;
 }
 
@@ -4373,22 +4385,18 @@ h6 {
   }
 }
 
-.tp-change {
+.tp-lpb-change {
+  font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   font-weight: 600;
-  font-family: 'JetBrains Mono', monospace;
-  padding: 2px 6px;
-  border-radius: 4px;
 }
 
-.tp-change.up {
+.tp-lpb-change.up {
   color: var(--accent-green);
-  background: var(--accent-green-dim);
 }
 
-.tp-change.down {
+.tp-lpb-change.down {
   color: var(--accent-red);
-  background: var(--accent-red-dim);
 }
 
 /* ── Controls Grid (2-column) ────────────────── */
@@ -4413,13 +4421,35 @@ h6 {
   gap: 8px;
   padding: 12px 16px;
   justify-content: center;
-  align-items: center;
+  align-items: stretch;
   min-width: 150px;
+}
+
+.tp-skip-confirm-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--gray-400);
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+
+.tp-skip-confirm-wrap input[type="checkbox"] {
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.tp-skip-confirm-wrap label {
+  cursor: pointer;
 }
 
 /* ── Order Type Tabs ─────────────────────────── */
 .tp-v2 .tp-order-types {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
   gap: 4px;
 }
 
@@ -4670,6 +4700,9 @@ h6 {
 }
 
 .tp-roster-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   font-weight: 600;
   padding: 3px 10px;
@@ -4684,6 +4717,25 @@ h6 {
   background: var(--accent-primary-dim);
   border-color: var(--accent-primary);
   color: var(--accent-primary);
+}
+
+.tp-chip-remove {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0.6;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tp-chip-remove:hover {
+  opacity: 1;
+  color: var(--accent-red);
 }
 
 /* ── Banners (Error / Result) ────────────────── */

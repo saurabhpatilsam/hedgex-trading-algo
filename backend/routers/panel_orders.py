@@ -38,7 +38,7 @@ router = APIRouter(prefix="/api/panel", tags=["trading-panel"])
 
 class PanelOrderRequest(BaseModel):
     group_id: Optional[int] = None      # Trade all accounts in group
-    account_id: Optional[int] = None    # Trade a single account
+    account_ids: Optional[List[int]] = None # Trade specific accounts
     instrument_symbol: str  # e.g. "NQ" — maps to contract_month for Tradovate
     action: str             # "Buy" or "Sell"
     quantity: int = 1
@@ -81,16 +81,16 @@ def place_panel_order(
     from required_api.tradovate_client import get_proxied_client
     from engine.alerting import create_alert
 
-    # ── Validate: exactly one of group_id or account_id ──
-    if payload.group_id and payload.account_id:
+    # ── Validate: exactly one of group_id or account_ids ──
+    if payload.group_id and payload.account_ids:
         raise HTTPException(
             status_code=400,
-            detail="Specify either group_id or account_id, not both.",
+            detail="Specify either group_id or account_ids, not both.",
         )
-    if not payload.group_id and not payload.account_id:
+    if not payload.group_id and not payload.account_ids:
         raise HTTPException(
             status_code=400,
-            detail="Either group_id or account_id is required.",
+            detail="Either group_id or account_ids is required.",
         )
 
     # ── Resolve accounts to trade ────────────────────────
@@ -120,18 +120,18 @@ def place_panel_order(
             m.account for m in group.memberships if m.account and m.account.is_active
         ]
     else:
-        # Single-account mode
-        account = (
+        # Multi-account mode
+        accounts = (
             db.query(Account)
             .options(joinedload(Account.credential))
-            .filter(Account.id == payload.account_id)
-            .first()
+            .filter(Account.id.in_(payload.account_ids))
+            .all()
         )
-        if not account:
-            raise HTTPException(status_code=404, detail="Account not found")
-        if not account.is_active:
-            raise HTTPException(status_code=400, detail="Account is not active")
-        target_accounts = [account]
+        if not accounts:
+            raise HTTPException(status_code=404, detail="No accounts found")
+        target_accounts = [acc for acc in accounts if acc.is_active]
+        if not target_accounts:
+            raise HTTPException(status_code=400, detail="No active accounts found in selection")
 
     # ── Resolve instrument ───────────────────────────────
     instrument = (

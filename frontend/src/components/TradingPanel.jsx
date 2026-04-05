@@ -17,7 +17,7 @@ export default function TradingPanel({ livePrices = {} }) {
     // ── Selection State ─────────────────────────────────
     const [tradingMode, setTradingMode] = useState("group"); // "group" | "account"
     const [selectedGroupId, setSelectedGroupId] = useState(null);
-    const [selectedAccountId, setSelectedAccountId] = useState(null);
+    const [selectedAccountIds, setSelectedAccountIds] = useState([]);
     const [selectedInstrument, setSelectedInstrument] = useState(null);
 
     // ── Order State ─────────────────────────────────────
@@ -31,6 +31,7 @@ export default function TradingPanel({ livePrices = {} }) {
     const [recentOrders, setRecentOrders] = useState([]);
     const [isPlacing, setIsPlacing] = useState(false);
     const [showConfirm, setShowConfirm] = useState(false);
+    const [skipConfirmation, setSkipConfirmation] = useState(true);
     const [lastResult, setLastResult] = useState(null);
     const [error, setError] = useState(null);
     const [priceFlash, setPriceFlash] = useState(false);
@@ -59,7 +60,7 @@ export default function TradingPanel({ livePrices = {} }) {
     // ── Derived Data ────────────────────────────────────
     const selectedGroup = groups.find((g) => g.id === selectedGroupId);
     const groupMembers = selectedGroup?.members || [];
-    const accountCount = tradingMode === "group" ? groupMembers.length : (selectedAccountId ? 1 : 0);
+    const accountCount = tradingMode === "group" ? groupMembers.length : selectedAccountIds.length;
     const totalContracts = accountCount * quantity;
 
     const contractSymbol = selectedInstrument?.contract_month || selectedInstrument?.symbol || "";
@@ -107,17 +108,25 @@ export default function TradingPanel({ livePrices = {} }) {
     const switchToGroup = (groupId) => {
         setTradingMode("group");
         setSelectedGroupId(groupId ? parseInt(groupId) : null);
-        setSelectedAccountId(null);
+        setSelectedAccountIds([]);
     };
 
     const switchToAccount = (accountId) => {
         setTradingMode("account");
-        setSelectedAccountId(accountId ? parseInt(accountId) : null);
         setSelectedGroupId(null);
+        if (!accountId) return;
+        const id = parseInt(accountId);
+        if (!selectedAccountIds.includes(id)) {
+            setSelectedAccountIds([...selectedAccountIds, id]);
+        }
+    };
+
+    const removeAccount = (accountId) => {
+        setSelectedAccountIds(selectedAccountIds.filter(id => id !== accountId));
     };
 
     // ── Order Submission ────────────────────────────────
-    const canTrade = tradingMode === "group" ? !!selectedGroupId : !!selectedAccountId;
+    const canTrade = tradingMode === "group" ? !!selectedGroupId : selectedAccountIds.length > 0;
 
     const handleOrderClick = (side) => {
         setAction(side);
@@ -138,10 +147,16 @@ export default function TradingPanel({ livePrices = {} }) {
             setError("Enter a stop price");
             return;
         }
-        setShowConfirm(true);
+
+        if (skipConfirmation) {
+            confirmOrder(side);
+        } else {
+            setShowConfirm(true);
+        }
     };
 
-    const confirmOrder = async () => {
+    const confirmOrder = async (sideOverride) => {
+        const orderSide = sideOverride || action;
         setShowConfirm(false);
         setIsPlacing(true);
         setError(null);
@@ -150,7 +165,7 @@ export default function TradingPanel({ livePrices = {} }) {
         try {
             const payload = {
                 instrument_symbol: selectedInstrument.symbol,
-                action: action,
+                action: orderSide,
                 quantity: quantity,
                 order_type: orderType,
             };
@@ -158,7 +173,7 @@ export default function TradingPanel({ livePrices = {} }) {
             if (tradingMode === "group") {
                 payload.group_id = selectedGroupId;
             } else {
-                payload.account_id = selectedAccountId;
+                payload.account_ids = selectedAccountIds;
             }
 
             if (orderType !== "Market" && price) {
@@ -209,7 +224,7 @@ export default function TradingPanel({ livePrices = {} }) {
     // ── Target label for display ────────────────────────
     const targetLabel = tradingMode === "group"
         ? (selectedGroup?.name || "—")
-        : (accounts.find(a => a.id === selectedAccountId)?.name || "—");
+        : (selectedAccountIds.length > 0 ? `${selectedAccountIds.length} targets` : "—");
 
     return (
         <div className="trading-panel tp-v2">
@@ -240,7 +255,7 @@ export default function TradingPanel({ livePrices = {} }) {
                         <label className="tp-sel-label">ACCOUNT</label>
                         <select
                             className={`tp-group-select ${tradingMode === "account" ? "active-mode" : ""}`}
-                            value={tradingMode === "account" ? (selectedAccountId || "") : ""}
+                            value=""
                             onChange={(e) => switchToAccount(e.target.value)}
                         >
                             <option value="">Select Account</option>
@@ -260,36 +275,43 @@ export default function TradingPanel({ livePrices = {} }) {
 
             {/* ── Instrument + Live Price ─────────────── */}
             <div className="tp-instrument-row">
-                <select
-                    className="tp-instrument-select"
-                    value={selectedInstrument?.id || ""}
-                    onChange={(e) => {
-                        const inst = instruments.find((i) => i.id === parseInt(e.target.value));
-                        setSelectedInstrument(inst || null);
-                        setPrice("");
-                        setStopPrice("");
-                    }}
-                >
-                    {instruments.map((inst) => (
-                        <option key={inst.id} value={inst.id}>
-                            {inst.contract_month || inst.symbol} — {inst.name}
-                        </option>
-                    ))}
-                </select>
+                <div className="tp-inst-left">
+                    <select
+                        className="tp-instrument-select"
+                        value={selectedInstrument?.id || ""}
+                        onChange={(e) => {
+                            const inst = instruments.find((i) => i.id === parseInt(e.target.value));
+                            setSelectedInstrument(inst || null);
+                            setPrice("");
+                            setStopPrice("");
+                        }}
+                    >
+                        <option value="">Select Instrument</option>
+                        {instruments.map((inst) => (
+                            <option key={inst.id} value={inst.id}>
+                                {inst.contract_month || inst.symbol}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+
+                {/* F2: Big Prominent Live Price */}
                 <div
-                    className={`tp-live-price ${orderType !== "Market" ? "tp-price-clickable" : ""}`}
+                    className={`tp-live-price-big ${orderType !== "Market" ? "tp-price-clickable" : ""}`}
                     onClick={orderType !== "Market" ? handlePriceClick : undefined}
-                    title={orderType !== "Market" ? "Click to fill price" : ""}
+                    title={orderType !== "Market" ? "Click to auto-fill price" : ""}
                 >
-                    <span className="tp-price-label">LAST</span>
-                    <span className={`tp-price-value ${change > 0 ? "up" : change < 0 ? "down" : ""} ${priceFlash ? "flash" : ""}`}>
-                        {currentPrice ? fmt(currentPrice) : "—"}
-                    </span>
-                    {change !== 0 && (
-                        <span className={`tp-change ${change > 0 ? "up" : "down"}`}>
-                            {change > 0 ? "▲" : "▼"} {fmt(Math.abs(change))}
+                    <span className="tp-lpb-label">LIVE PRICE</span>
+                    <div className="tp-lpb-value-box">
+                        <span className={`tp-lpb-value ${change > 0 ? "up" : change < 0 ? "down" : ""} ${priceFlash ? "flash" : ""}`}>
+                            {currentPrice ? fmt(currentPrice) : "—"}
                         </span>
-                    )}
+                        {change !== 0 && (
+                            <span className={`tp-lpb-change ${change > 0 ? "up" : "down"}`}>
+                                {change > 0 ? "▲" : "▼"} {fmt(Math.abs(change))}
+                            </span>
+                        )}
+                    </div>
                 </div>
             </div>
 
@@ -379,8 +401,18 @@ export default function TradingPanel({ livePrices = {} }) {
                     </div>
                 </div>
 
-                {/* Right: Buy/Sell */}
+                {/* Right: Actions */}
                 <div className="tp-right-col">
+                    <div className="tp-skip-confirm-wrap">
+                        <input
+                            type="checkbox"
+                            id="skipConfirmation"
+                            checked={skipConfirmation}
+                            onChange={(e) => setSkipConfirmation(e.target.checked)}
+                        />
+                        <label htmlFor="skipConfirmation">Fast trading (skip confirmation)</label>
+                    </div>
+
                     <button
                         className="tp-buy-btn"
                         onClick={() => handleOrderClick("Buy")}
@@ -422,11 +454,12 @@ export default function TradingPanel({ livePrices = {} }) {
                                 </span>
                             );
                         })}
-                        {tradingMode === "account" && selectedAccountId && (
-                            <span className="tp-roster-chip active">
-                                {accounts.find(a => a.id === selectedAccountId)?.name || `#${selectedAccountId}`}
+                        {tradingMode === "account" && selectedAccountIds.map((id) => (
+                            <span key={id} className="tp-roster-chip active">
+                                {accounts.find(a => a.id === id)?.name || `#${id}`}
+                                <button className="tp-chip-remove" onClick={() => removeAccount(id)}>✕</button>
                             </span>
-                        )}
+                        ))}
                     </div>
                 </div>
             )}
