@@ -188,7 +188,7 @@ async def get_live_quote(symbol: str = Query(..., description="Contract symbol e
     from sqlalchemy.orm import Session
     from database import SessionLocal
     from models import BrokerCredential, User
-    from required_api.tradovate_client import get_proxied_client
+    from required_api.tradovate_client import TradovateClient
 
     db = SessionLocal()
     try:
@@ -199,8 +199,8 @@ async def get_live_quote(symbol: str = Query(..., description="Contract symbol e
         if not cred:
             return {"symbol": symbol, "error": "No active credentials", "price": None}
 
-        user = db.query(User).filter(User.id == cred.user_id).first()
-        client = get_proxied_client(user=user)
+        # Market data polling does not require IP binding, so we use a direct client
+        client = TradovateClient()
         token, err = client.login(cred.login_id, cred.password)
 
         if not token:
