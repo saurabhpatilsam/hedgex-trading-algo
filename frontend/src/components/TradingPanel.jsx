@@ -1,59 +1,65 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { panelApi, groupsApi, instrumentsApi } from "../api";
+import { panelApi, groupsApi, instrumentsApi, accountsApi, usersApi } from "../api";
 
 /**
- * TradingPanel — Professional order placement panel (NinjaTrader-inspired).
+ * TradingPanel V2 — Professional order placement panel (NinjaTrader-inspired).
  *
  * Props:
  *   livePrices  — { symbol: { price, bid, ask, change, ... } } from SSE
  */
 export default function TradingPanel({ livePrices = {} }) {
-    // ── State ──────────────────────────────────────────
+    // ── Data State ──────────────────────────────────────
     const [groups, setGroups] = useState([]);
     const [instruments, setInstruments] = useState([]);
+    const [accounts, setAccounts] = useState([]);
+    const [users, setUsers] = useState([]);
+
+    // ── Selection State ─────────────────────────────────
+    const [tradingMode, setTradingMode] = useState("group"); // "group" | "account"
     const [selectedGroupId, setSelectedGroupId] = useState(null);
+    const [selectedAccountId, setSelectedAccountId] = useState(null);
     const [selectedInstrument, setSelectedInstrument] = useState(null);
+
+    // ── Order State ─────────────────────────────────────
     const [orderType, setOrderType] = useState("Market");
-    const [action, setAction] = useState(null); // null until user clicks Buy/Sell
+    const [action, setAction] = useState(null);
     const [quantity, setQuantity] = useState(1);
     const [price, setPrice] = useState("");
     const [stopPrice, setStopPrice] = useState("");
+
+    // ── UI State ────────────────────────────────────────
     const [recentOrders, setRecentOrders] = useState([]);
     const [isPlacing, setIsPlacing] = useState(false);
     const [showConfirm, setShowConfirm] = useState(false);
     const [lastResult, setLastResult] = useState(null);
     const [error, setError] = useState(null);
+    const [priceFlash, setPriceFlash] = useState(false);
     const priceInputRef = useRef(null);
+    const stopInputRef = useRef(null);
+    const flashRef = useRef(null);
 
-    // ── Load groups & instruments on mount ──────────────
+    // ── Load Data on Mount ──────────────────────────────
     useEffect(() => {
         groupsApi.list().then(setGroups).catch(console.error);
         instrumentsApi.list().then((data) => {
             setInstruments(data);
             if (data.length > 0) setSelectedInstrument(data[0]);
         }).catch(console.error);
+        accountsApi.list().then(setAccounts).catch(console.error);
+        usersApi.list().then(setUsers).catch(console.error);
         loadRecentOrders();
     }, []);
 
     const loadRecentOrders = useCallback(() => {
-        panelApi.listOrders(20).then((res) => {
+        panelApi.listOrders(30).then((res) => {
             setRecentOrders(res.orders || []);
         }).catch(console.error);
     }, []);
 
-    // ── Auto-fill price from live data ──────────────────
-    useEffect(() => {
-        if (!selectedInstrument || orderType === "Market") return;
-        const sym = selectedInstrument.contract_month || selectedInstrument.symbol;
-        const lp = livePrices[sym];
-        if (lp?.price && !price) {
-            setPrice(String(lp.price));
-        }
-    }, [selectedInstrument, livePrices, orderType]);
-
-    // ── Derived data ────────────────────────────────────
+    // ── Derived Data ────────────────────────────────────
     const selectedGroup = groups.find((g) => g.id === selectedGroupId);
-    const accountCount = selectedGroup?.members?.length || 0;
+    const groupMembers = selectedGroup?.members || [];
+    const accountCount = tradingMode === "group" ? groupMembers.length : (selectedAccountId ? 1 : 0);
     const totalContracts = accountCount * quantity;
 
     const contractSymbol = selectedInstrument?.contract_month || selectedInstrument?.symbol || "";
@@ -63,20 +69,73 @@ export default function TradingPanel({ livePrices = {} }) {
     const ask = liveData.ask || currentPrice;
     const change = liveData.change || 0;
 
+    // Group accounts by user for account dropdown
+    const accountsByUser = users.map((u) => ({
+        user: u,
+        accounts: accounts.filter((a) => a.user_id === u.id),
+    })).filter((g) => g.accounts.length > 0);
+
+    // ── Price flash effect on tick ───────────────────────
+    const prevPriceRef = useRef(currentPrice);
+    useEffect(() => {
+        if (currentPrice && currentPrice !== prevPriceRef.current) {
+            setPriceFlash(true);
+            if (flashRef.current) clearTimeout(flashRef.current);
+            flashRef.current = setTimeout(() => setPriceFlash(false), 300);
+            prevPriceRef.current = currentPrice;
+        }
+    }, [currentPrice]);
+
+    // ── Click-to-fill price handler ─────────────────────
+    const handlePriceClick = () => {
+        if (!currentPrice) return;
+        if (orderType === "Limit" || orderType === "StopLimit") {
+            setPrice(String(currentPrice));
+            priceInputRef.current?.focus();
+        }
+        if (orderType === "Stop") {
+            setStopPrice(String(currentPrice));
+            stopInputRef.current?.focus();
+        }
+        if (orderType === "StopLimit") {
+            // For StopLimit, also fill stop if empty
+            if (!stopPrice) setStopPrice(String(currentPrice));
+        }
+    };
+
+    // ── Mode switching ──────────────────────────────────
+    const switchToGroup = (groupId) => {
+        setTradingMode("group");
+        setSelectedGroupId(groupId ? parseInt(groupId) : null);
+        setSelectedAccountId(null);
+    };
+
+    const switchToAccount = (accountId) => {
+        setTradingMode("account");
+        setSelectedAccountId(accountId ? parseInt(accountId) : null);
+        setSelectedGroupId(null);
+    };
+
     // ── Order Submission ────────────────────────────────
+    const canTrade = tradingMode === "group" ? !!selectedGroupId : !!selectedAccountId;
+
     const handleOrderClick = (side) => {
         setAction(side);
         setError(null);
-        if (!selectedGroupId) {
-            setError("Select a group first");
+        if (!canTrade) {
+            setError(tradingMode === "group" ? "Select a group first" : "Select an account first");
             return;
         }
         if (!selectedInstrument) {
             setError("Select an instrument first");
             return;
         }
-        if (orderType !== "Market" && !price) {
-            setError("Enter a price for Limit/Stop orders");
+        if ((orderType === "Limit" || orderType === "StopLimit") && !price) {
+            setError("Enter a limit price");
+            return;
+        }
+        if ((orderType === "Stop" || orderType === "StopLimit") && !stopPrice) {
+            setError("Enter a stop price");
             return;
         }
         setShowConfirm(true);
@@ -90,12 +149,18 @@ export default function TradingPanel({ livePrices = {} }) {
 
         try {
             const payload = {
-                group_id: selectedGroupId,
                 instrument_symbol: selectedInstrument.symbol,
                 action: action,
                 quantity: quantity,
                 order_type: orderType,
             };
+
+            if (tradingMode === "group") {
+                payload.group_id = selectedGroupId;
+            } else {
+                payload.account_id = selectedAccountId;
+            }
+
             if (orderType !== "Market" && price) {
                 payload.price = parseFloat(price);
             }
@@ -105,12 +170,9 @@ export default function TradingPanel({ livePrices = {} }) {
 
             const result = await panelApi.placeOrder(payload);
             setLastResult(result);
-            loadRecentOrders();
+            loadRecentOrders(); // auto-refresh
 
-            // Auto-clear price for next order
-            if (orderType === "Market") {
-                setPrice("");
-            }
+            if (orderType === "Market") setPrice("");
         } catch (err) {
             setError(err.message || "Order failed");
         } finally {
@@ -142,32 +204,61 @@ export default function TradingPanel({ livePrices = {} }) {
         return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     };
 
-    // ── ORDER TYPE TABS ─────────────────────────────────
     const orderTypes = ["Market", "Limit", "Stop", "StopLimit"];
 
+    // ── Target label for display ────────────────────────
+    const targetLabel = tradingMode === "group"
+        ? (selectedGroup?.name || "—")
+        : (accounts.find(a => a.id === selectedAccountId)?.name || "—");
+
     return (
-        <div className="trading-panel">
-            {/* ── Header ────────────────────────────────── */}
+        <div className="trading-panel tp-v2">
+            {/* ── Header: Title + Mode Selectors ──────── */}
             <div className="tp-header">
                 <div className="tp-title">
                     <span className="tp-icon">⚡</span>
                     <h3>Trading Panel</h3>
                 </div>
-                <select
-                    className="tp-group-select"
-                    value={selectedGroupId || ""}
-                    onChange={(e) => setSelectedGroupId(e.target.value ? parseInt(e.target.value) : null)}
-                >
-                    <option value="">Select Group</option>
-                    {groups.map((g) => (
-                        <option key={g.id} value={g.id}>
-                            {g.name} ({g.members?.length || 0} accts)
-                        </option>
-                    ))}
-                </select>
+                <div className="tp-selectors">
+                    <div className="tp-selector-group">
+                        <label className="tp-sel-label">GROUP</label>
+                        <select
+                            className={`tp-group-select ${tradingMode === "group" ? "active-mode" : ""}`}
+                            value={tradingMode === "group" ? (selectedGroupId || "") : ""}
+                            onChange={(e) => switchToGroup(e.target.value)}
+                        >
+                            <option value="">Select Group</option>
+                            {groups.map((g) => (
+                                <option key={g.id} value={g.id}>
+                                    {g.name} ({g.members?.length || 0})
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                    <span className="tp-or-sep">OR</span>
+                    <div className="tp-selector-group">
+                        <label className="tp-sel-label">ACCOUNT</label>
+                        <select
+                            className={`tp-group-select ${tradingMode === "account" ? "active-mode" : ""}`}
+                            value={tradingMode === "account" ? (selectedAccountId || "") : ""}
+                            onChange={(e) => switchToAccount(e.target.value)}
+                        >
+                            <option value="">Select Account</option>
+                            {accountsByUser.map((ug) => (
+                                <optgroup key={ug.user.id} label={`👤 ${ug.user.name}`}>
+                                    {ug.accounts.map((a) => (
+                                        <option key={a.id} value={a.id}>
+                                            {a.name}
+                                        </option>
+                                    ))}
+                                </optgroup>
+                            ))}
+                        </select>
+                    </div>
+                </div>
             </div>
 
-            {/* ── Instrument Row ────────────────────────── */}
+            {/* ── Instrument + Live Price ─────────────── */}
             <div className="tp-instrument-row">
                 <select
                     className="tp-instrument-select"
@@ -185,9 +276,13 @@ export default function TradingPanel({ livePrices = {} }) {
                         </option>
                     ))}
                 </select>
-                <div className="tp-live-price">
-                    <span className="tp-price-label">Last</span>
-                    <span className={`tp-price-value ${change > 0 ? "up" : change < 0 ? "down" : ""}`}>
+                <div
+                    className={`tp-live-price ${orderType !== "Market" ? "tp-price-clickable" : ""}`}
+                    onClick={orderType !== "Market" ? handlePriceClick : undefined}
+                    title={orderType !== "Market" ? "Click to fill price" : ""}
+                >
+                    <span className="tp-price-label">LAST</span>
+                    <span className={`tp-price-value ${change > 0 ? "up" : change < 0 ? "down" : ""} ${priceFlash ? "flash" : ""}`}>
                         {currentPrice ? fmt(currentPrice) : "—"}
                     </span>
                     {change !== 0 && (
@@ -198,125 +293,145 @@ export default function TradingPanel({ livePrices = {} }) {
                 </div>
             </div>
 
-            {/* ── Order Type Tabs ───────────────────────── */}
-            <div className="tp-order-types">
-                {orderTypes.map((ot) => (
-                    <button
-                        key={ot}
-                        className={`tp-ot-btn ${orderType === ot ? "active" : ""}`}
-                        onClick={() => {
-                            setOrderType(ot);
-                            if (ot === "Market") { setPrice(""); setStopPrice(""); }
-                        }}
-                    >
-                        {ot === "StopLimit" ? "Stop Limit" : ot}
-                    </button>
-                ))}
-            </div>
+            {/* ── Compact Controls Grid ───────────────── */}
+            <div className="tp-controls-grid">
+                {/* Left: Order Type + Qty + Price */}
+                <div className="tp-left-col">
+                    <div className="tp-order-types">
+                        {orderTypes.map((ot) => (
+                            <button
+                                key={ot}
+                                className={`tp-ot-btn ${orderType === ot ? "active" : ""}`}
+                                onClick={() => {
+                                    setOrderType(ot);
+                                    if (ot === "Market") { setPrice(""); setStopPrice(""); }
+                                }}
+                            >
+                                {ot === "StopLimit" ? "STP LMT" : ot.toUpperCase()}
+                            </button>
+                        ))}
+                    </div>
 
-            {/* ── Quantity & Price Controls ──────────────── */}
-            <div className="tp-controls">
-                <div className="tp-qty-section">
-                    <label>Qty</label>
-                    <div className="tp-qty-stepper">
-                        <button onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button>
-                        <input
-                            type="number"
-                            min="1"
-                            value={quantity}
-                            onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                        />
-                        <button onClick={() => setQuantity(quantity + 1)}>+</button>
+                    <div className="tp-inputs-row">
+                        <div className="tp-qty-section">
+                            <label>QTY</label>
+                            <div className="tp-qty-stepper">
+                                <button onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={quantity}
+                                    onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                                />
+                                <button onClick={() => setQuantity(quantity + 1)}>+</button>
+                            </div>
+                        </div>
+
+                        {(orderType === "Limit" || orderType === "StopLimit") && (
+                            <div className="tp-price-section">
+                                <label>LIMIT PRICE</label>
+                                <div className="tp-price-input-wrap">
+                                    <span className="tp-currency">$</span>
+                                    <input
+                                        ref={priceInputRef}
+                                        type="number"
+                                        step="0.25"
+                                        placeholder={currentPrice ? fmt(currentPrice) : "0.00"}
+                                        value={price}
+                                        onChange={(e) => setPrice(e.target.value)}
+                                        className="tp-price-input"
+                                    />
+                                    {currentPrice && (
+                                        <button
+                                            className="tp-price-snap"
+                                            onClick={() => setPrice(String(currentPrice))}
+                                            title="Snap to market"
+                                        >⎔</button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {(orderType === "Stop" || orderType === "StopLimit") && (
+                            <div className="tp-price-section">
+                                <label>STOP PRICE</label>
+                                <div className="tp-price-input-wrap">
+                                    <span className="tp-currency">$</span>
+                                    <input
+                                        ref={stopInputRef}
+                                        type="number"
+                                        step="0.25"
+                                        placeholder="0.00"
+                                        value={stopPrice}
+                                        onChange={(e) => setStopPrice(e.target.value)}
+                                        className="tp-price-input"
+                                    />
+                                    {currentPrice && (
+                                        <button
+                                            className="tp-price-snap"
+                                            onClick={() => setStopPrice(String(currentPrice))}
+                                            title="Snap to market"
+                                        >⎔</button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
 
-                {orderType !== "Market" && (
-                    <div className="tp-price-section">
-                        <label>{orderType === "Stop" ? "Stop Price" : "Limit Price"}</label>
-                        <div className="tp-price-input-wrap">
-                            <span className="tp-currency">$</span>
-                            <input
-                                ref={priceInputRef}
-                                type="number"
-                                step="0.25"
-                                placeholder={currentPrice ? fmt(currentPrice) : "0.00"}
-                                value={price}
-                                onChange={(e) => setPrice(e.target.value)}
-                                className="tp-price-input"
-                            />
-                            {currentPrice && (
-                                <button
-                                    className="tp-price-snap"
-                                    onClick={() => setPrice(String(currentPrice))}
-                                    title="Use current price"
-                                >
-                                    ⎔
-                                </button>
-                            )}
-                        </div>
+                {/* Right: Buy/Sell */}
+                <div className="tp-right-col">
+                    <button
+                        className="tp-buy-btn"
+                        onClick={() => handleOrderClick("Buy")}
+                        disabled={isPlacing || !canTrade}
+                    >
+                        <span className="tp-btn-label">BUY</span>
+                        <span className="tp-btn-price">{ask ? fmt(ask) : "—"}</span>
+                    </button>
+                    <button
+                        className="tp-sell-btn"
+                        onClick={() => handleOrderClick("Sell")}
+                        disabled={isPlacing || !canTrade}
+                    >
+                        <span className="tp-btn-label">SELL</span>
+                        <span className="tp-btn-price">{bid ? fmt(bid) : "—"}</span>
+                    </button>
+                </div>
+            </div>
+
+            {/* ── Account Roster ──────────────────────── */}
+            {canTrade && (
+                <div className="tp-account-roster">
+                    <div className="tp-roster-header">
+                        <span className="tp-roster-label">
+                            📋 {tradingMode === "group" ? "Group Accounts" : "Target Account"}
+                            <strong> ({accountCount})</strong>
+                        </span>
+                        <span className="tp-roster-total">
+                            {quantity} × {accountCount} = <strong>{totalContracts}</strong> contracts
+                        </span>
                     </div>
-                )}
-
-                {orderType === "StopLimit" && (
-                    <div className="tp-price-section">
-                        <label>Stop Trigger</label>
-                        <div className="tp-price-input-wrap">
-                            <span className="tp-currency">$</span>
-                            <input
-                                type="number"
-                                step="0.25"
-                                placeholder="0.00"
-                                value={stopPrice}
-                                onChange={(e) => setStopPrice(e.target.value)}
-                                className="tp-price-input"
-                            />
-                        </div>
+                    <div className="tp-roster-chips">
+                        {tradingMode === "group" && groupMembers.map((m) => {
+                            const acct = accounts.find(a => a.id === (m.account_id || m.id));
+                            const acctName = acct?.name || m.account_name || `#${m.account_id || m.id}`;
+                            return (
+                                <span key={m.id || m.account_id} className="tp-roster-chip">
+                                    {acctName}
+                                </span>
+                            );
+                        })}
+                        {tradingMode === "account" && selectedAccountId && (
+                            <span className="tp-roster-chip active">
+                                {accounts.find(a => a.id === selectedAccountId)?.name || `#${selectedAccountId}`}
+                            </span>
+                        )}
                     </div>
-                )}
-            </div>
+                </div>
+            )}
 
-            {/* ── Buy / Sell Buttons ─────────────────────── */}
-            <div className="tp-action-buttons">
-                <button
-                    className="tp-buy-btn"
-                    onClick={() => handleOrderClick("Buy")}
-                    disabled={isPlacing || !selectedGroupId}
-                >
-                    <span className="tp-btn-label">BUY</span>
-                    <span className="tp-btn-price">{ask ? fmt(ask) : "—"}</span>
-                </button>
-                <button
-                    className="tp-sell-btn"
-                    onClick={() => handleOrderClick("Sell")}
-                    disabled={isPlacing || !selectedGroupId}
-                >
-                    <span className="tp-btn-label">SELL</span>
-                    <span className="tp-btn-price">{bid ? fmt(bid) : "—"}</span>
-                </button>
-            </div>
-
-            {/* ── Order Summary Bar ──────────────────────── */}
-            <div className="tp-summary-bar">
-                {selectedGroup ? (
-                    <>
-                        <span className="tp-sum-item">
-                            <strong>{accountCount}</strong> accounts
-                        </span>
-                        <span className="tp-sum-sep">×</span>
-                        <span className="tp-sum-item">
-                            <strong>{quantity}</strong> contract{quantity > 1 ? "s" : ""}
-                        </span>
-                        <span className="tp-sum-sep">=</span>
-                        <span className="tp-sum-item tp-sum-total">
-                            <strong>{totalContracts}</strong> total
-                        </span>
-                    </>
-                ) : (
-                    <span className="tp-sum-warn">Select a group to begin trading</span>
-                )}
-            </div>
-
-            {/* ── Error / Result Banner ──────────────────── */}
+            {/* ── Error / Result Banner ───────────────── */}
             {error && (
                 <div className="tp-banner tp-error">
                     <span>⚠️ {error}</span>
@@ -334,11 +449,11 @@ export default function TradingPanel({ livePrices = {} }) {
                 </div>
             )}
 
-            {/* ── Confirmation Modal ─────────────────────── */}
+            {/* ── Confirmation Modal ──────────────────── */}
             {showConfirm && (
                 <div className="tp-confirm-overlay" onClick={() => setShowConfirm(false)}>
                     <div className="tp-confirm-modal" onClick={(e) => e.stopPropagation()}>
-                        <h4>Confirm Order</h4>
+                        <h4>⚡ Confirm Order</h4>
                         <div className="tp-confirm-details">
                             <div className="tp-cd-row">
                                 <span>Action</span>
@@ -355,16 +470,16 @@ export default function TradingPanel({ livePrices = {} }) {
                                 <span>{orderType}</span>
                             </div>
                             <div className="tp-cd-row">
-                                <span>Qty per Account</span>
+                                <span>Qty / Account</span>
                                 <span>{quantity}</span>
                             </div>
-                            {orderType !== "Market" && (
+                            {(orderType === "Limit" || orderType === "StopLimit") && (
                                 <div className="tp-cd-row">
-                                    <span>Price</span>
+                                    <span>Limit Price</span>
                                     <span>${price}</span>
                                 </div>
                             )}
-                            {stopPrice && (
+                            {(orderType === "Stop" || orderType === "StopLimit") && stopPrice && (
                                 <div className="tp-cd-row">
                                     <span>Stop Price</span>
                                     <span>${stopPrice}</span>
@@ -372,8 +487,8 @@ export default function TradingPanel({ livePrices = {} }) {
                             )}
                             <div className="tp-cd-divider" />
                             <div className="tp-cd-row tp-cd-highlight">
-                                <span>Group</span>
-                                <span>{selectedGroup?.name}</span>
+                                <span>Target</span>
+                                <span>{targetLabel}</span>
                             </div>
                             <div className="tp-cd-row tp-cd-highlight">
                                 <span>Accounts</span>
@@ -400,7 +515,7 @@ export default function TradingPanel({ livePrices = {} }) {
                 </div>
             )}
 
-            {/* ── Recent Orders Table ────────────────────── */}
+            {/* ── Recent Orders ────────────────────────── */}
             <div className="tp-recent">
                 <div className="tp-recent-header">
                     <h4>📋 Recent Orders</h4>
@@ -414,6 +529,7 @@ export default function TradingPanel({ livePrices = {} }) {
                             <thead>
                                 <tr>
                                     <th>Time</th>
+                                    <th>Account</th>
                                     <th>Symbol</th>
                                     <th>Side</th>
                                     <th>Qty</th>
@@ -427,6 +543,7 @@ export default function TradingPanel({ livePrices = {} }) {
                                 {recentOrders.map((o) => (
                                     <tr key={o.id}>
                                         <td className="tp-td-time">{fmtTime(o.created_at)}</td>
+                                        <td className="tp-td-acct">{o.account_name || "—"}</td>
                                         <td className="tp-td-sym">{o.contract || o.instrument_symbol}</td>
                                         <td className={o.side === "Buy" ? "tp-text-green" : "tp-text-red"}>
                                             {o.side}
@@ -445,9 +562,7 @@ export default function TradingPanel({ livePrices = {} }) {
                                                     className="tp-cancel-order-btn"
                                                     onClick={() => cancelOrder(o.broker_order_id, o.account_id)}
                                                     title="Cancel order"
-                                                >
-                                                    ✕
-                                                </button>
+                                                >✕</button>
                                             )}
                                         </td>
                                     </tr>

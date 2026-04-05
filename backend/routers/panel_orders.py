@@ -37,7 +37,8 @@ router = APIRouter(prefix="/api/panel", tags=["trading-panel"])
 
 
 class PanelOrderRequest(BaseModel):
-    group_id: int
+    group_id: Optional[int] = None      # Trade all accounts in group
+    account_id: Optional[int] = None    # Trade a single account
     instrument_symbol: str  # e.g. "NQ" — maps to contract_month for Tradovate
     action: str             # "Buy" or "Sell"
     quantity: int = 1
@@ -80,25 +81,57 @@ def place_panel_order(
     from required_api.tradovate_client import get_proxied_client
     from engine.alerting import create_alert
 
-    # ── Validate group ───────────────────────────────────
-    group = (
-        db.query(Group)
-        .options(
-            joinedload(Group.memberships)
-            .joinedload(GroupMembership.account)
-            .joinedload(Account.credential)
-        )
-        .filter(Group.id == payload.group_id)
-        .first()
-    )
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
-
-    if not group.memberships:
+    # ── Validate: exactly one of group_id or account_id ──
+    if payload.group_id and payload.account_id:
         raise HTTPException(
             status_code=400,
-            detail="Group has no accounts. Add accounts to the group first.",
+            detail="Specify either group_id or account_id, not both.",
         )
+    if not payload.group_id and not payload.account_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Either group_id or account_id is required.",
+        )
+
+    # ── Resolve accounts to trade ────────────────────────
+    group = None
+    target_accounts = []  # list of Account ORM objects (with .credential loaded)
+
+    if payload.group_id:
+        # Group mode: fan-out to all members
+        group = (
+            db.query(Group)
+            .options(
+                joinedload(Group.memberships)
+                .joinedload(GroupMembership.account)
+                .joinedload(Account.credential)
+            )
+            .filter(Group.id == payload.group_id)
+            .first()
+        )
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+        if not group.memberships:
+            raise HTTPException(
+                status_code=400,
+                detail="Group has no accounts. Add accounts to the group first.",
+            )
+        target_accounts = [
+            m.account for m in group.memberships if m.account and m.account.is_active
+        ]
+    else:
+        # Single-account mode
+        account = (
+            db.query(Account)
+            .options(joinedload(Account.credential))
+            .filter(Account.id == payload.account_id)
+            .first()
+        )
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if not account.is_active:
+            raise HTTPException(status_code=400, detail="Account is not active")
+        target_accounts = [account]
 
     # ── Resolve instrument ───────────────────────────────
     instrument = (
@@ -139,11 +172,7 @@ def place_panel_order(
     # Cache logins per credential to avoid re-authenticating
     client_cache = {}
 
-    for membership in group.memberships:
-        account = membership.account
-        if not account or not account.is_active:
-            continue
-
+    for account in target_accounts:
         cred = account.credential
         if not cred or not cred.is_active:
             results.append({
@@ -242,12 +271,14 @@ def place_panel_order(
     db.flush()
 
     # Create audit log
+    group_name = group.name if group else f"Account #{payload.account_id}"
     audit = AuditLog(
         strategy_id=None,
         event_type="PANEL_ORDER",
         details_json=json.dumps({
             "group_id": payload.group_id,
-            "group_name": group.name,
+            "account_id": payload.account_id,
+            "group_name": group_name,
             "instrument": payload.instrument_symbol,
             "contract": tradovate_symbol,
             "action": payload.action,
@@ -269,7 +300,7 @@ def place_panel_order(
         alert_type="TRADING",
         title=f"Panel: {payload.action} {payload.quantity}x {tradovate_symbol} {price_str}",
         message=(
-            f"Group: {group.name} | "
+            f"Target: {group_name} | "
             f"Type: {payload.order_type} | "
             f"Success: {success_count}/{success_count + fail_count}"
         ),
@@ -279,7 +310,7 @@ def place_panel_order(
 
     return {
         "order_id": audit.id,
-        "group_name": group.name,
+        "group_name": group_name,
         "instrument": tradovate_symbol,
         "action": payload.action,
         "quantity": payload.quantity,
