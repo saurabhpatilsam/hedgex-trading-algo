@@ -172,3 +172,52 @@ async def get_md_status():
         return {"state": "unknown", "message": "No status reported by hedgex-md service"}
     except Exception as e:
         return {"state": "error", "error": str(e)}
+
+
+# ── Live Quote Fallback (direct from Tradovate) ──────────
+
+
+@router.get("/live-quote")
+async def get_live_quote(symbol: str = Query(..., description="Contract symbol e.g. NQU5")):
+    """
+    Fetch live quote directly from Tradovate REST/WS API.
+
+    This is a fallback when the hedgex-md service / Redis pipeline is down.
+    Uses the first active credential to authenticate and fetch the last price.
+    """
+    from sqlalchemy.orm import Session
+    from database import SessionLocal
+    from models import BrokerCredential, User
+    from required_api.tradovate_client import get_proxied_client
+
+    db = SessionLocal()
+    try:
+        cred = db.query(BrokerCredential).filter(
+            BrokerCredential.is_active == True
+        ).first()
+
+        if not cred:
+            return {"symbol": symbol, "error": "No active credentials", "price": None}
+
+        user = db.query(User).filter(User.id == cred.user_id).first()
+        client = get_proxied_client(user=user)
+        token, err = client.login(cred.login_id, cred.password)
+
+        if not token:
+            return {"symbol": symbol, "error": f"Login failed: {err}", "price": None}
+
+        quote = client.get_last_price(symbol)
+        return {
+            "symbol": symbol,
+            "price": quote.get("last_price"),
+            "bid": quote.get("bid"),
+            "ask": quote.get("ask"),
+            "change": 0,
+            "source": "tradovate_direct",
+        }
+    except Exception as e:
+        logger.error(f"Live quote error for {symbol}: {e}")
+        return {"symbol": symbol, "error": str(e), "price": None}
+    finally:
+        db.close()
+

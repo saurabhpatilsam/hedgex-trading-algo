@@ -143,6 +143,8 @@ export const marketApi = {
         request(`/market/ticks/${encodeURIComponent(symbol)}?limit=${limit}`),
     status: () => request("/market/status"),
     streamUrl: () => `${API_BASE}/market/stream`,
+    liveQuote: (symbol) =>
+        request(`/market/live-quote?symbol=${encodeURIComponent(symbol)}`),
 };
 
 // ── Trading System (New) ───────────────────────────────────
@@ -222,11 +224,20 @@ export const tradingApi = {
 export const panelApi = {
     placeOrder: (data) =>
         request("/panel/order", { method: "POST", body: JSON.stringify(data) }),
-    listOrders: (limit = 50) =>
-        request(`/panel/orders?limit=${limit}`),
+    listOrders: (limit = 50, state = null) => {
+        let url = `/panel/orders?limit=${limit}`;
+        if (state) url += `&state=${state}`;
+        return request(url);
+    },
     cancelOrder: (brokerOrderId, accountId) =>
         request("/panel/cancel", {
             method: "POST",
             body: JSON.stringify({ broker_order_id: brokerOrderId, account_id: accountId }),
+        }),
+    positions: () => request("/panel/positions"),
+    flatten: (accountId, symbol) =>
+        request("/panel/flatten", {
+            method: "POST",
+            body: JSON.stringify({ account_id: accountId, symbol }),
         }),
 };

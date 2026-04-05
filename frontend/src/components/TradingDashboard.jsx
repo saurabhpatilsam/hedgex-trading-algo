@@ -161,14 +161,34 @@ export default function TradingDashboard() {
         };
     }, []);
 
-    // Fallback: if SSE not working, poll prices every 3s
+    // Fallback: if SSE not working, poll prices every 3s via cached Redis, then direct REST
+    const fallbackSymbolsRef = useRef(FALLBACK_INSTRUMENTS);
     useEffect(() => {
         if (sseConnected) return;
-        const fallback = setInterval(() => {
-            marketApi.prices().then(data => {
-                if (data.prices) setLivePrices(data.prices);
-            }).catch(() => { });
-        }, 3000);
+
+        const fallback = setInterval(async () => {
+            try {
+                const data = await marketApi.prices();
+                if (data.prices && Object.keys(data.prices).length > 0) {
+                    setLivePrices(data.prices);
+                    return; // Redis pipeline is working
+                }
+            } catch { }
+
+            // Redis returned nothing — poll Tradovate directly per symbol
+            const symbols = fallbackSymbolsRef.current;
+            for (const sym of symbols) {
+                try {
+                    const quote = await marketApi.liveQuote(sym);
+                    if (quote?.price != null) {
+                        setLivePrices(prev => ({
+                            ...prev,
+                            [quote.symbol || sym]: quote,
+                        }));
+                    }
+                } catch { }
+            }
+        }, 5000);
         return () => clearInterval(fallback);
     }, [sseConnected]);
 

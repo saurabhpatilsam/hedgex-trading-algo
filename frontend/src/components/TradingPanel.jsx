@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { panelApi, groupsApi, instrumentsApi, accountsApi, usersApi } from "../api";
+import { panelApi, groupsApi, instrumentsApi, accountsApi, usersApi, marketApi } from "../api";
 
 /**
  * TradingPanel V2 — Professional order placement panel (NinjaTrader-inspired).
@@ -64,7 +64,43 @@ export default function TradingPanel({ livePrices = {} }) {
     const totalContracts = accountCount * quantity;
 
     const contractSymbol = selectedInstrument?.contract_month || selectedInstrument?.symbol || "";
-    const liveData = livePrices[contractSymbol] || {};
+
+    // ── Direct price polling fallback ────────────────────
+    const [fallbackPrice, setFallbackPrice] = useState(null);
+    const fallbackRef = useRef(null);
+
+    useEffect(() => {
+        // If SSE provides no data for this symbol, poll Tradovate directly
+        const sseHasData = livePrices[contractSymbol]?.price != null;
+        if (sseHasData || !contractSymbol) {
+            // SSE is working, clear any fallback interval
+            if (fallbackRef.current) {
+                clearInterval(fallbackRef.current);
+                fallbackRef.current = null;
+            }
+            return;
+        }
+
+        // Start polling
+        const poll = () => {
+            marketApi.liveQuote(contractSymbol).then(data => {
+                if (data?.price != null) {
+                    setFallbackPrice(data);
+                }
+            }).catch(() => { });
+        };
+        poll(); // Immediate first call
+        fallbackRef.current = setInterval(poll, 5000);
+
+        return () => {
+            if (fallbackRef.current) {
+                clearInterval(fallbackRef.current);
+                fallbackRef.current = null;
+            }
+        };
+    }, [contractSymbol, livePrices[contractSymbol]?.price]);
+
+    const liveData = livePrices[contractSymbol] || (fallbackPrice?.symbol === contractSymbol ? fallbackPrice : {});
     const currentPrice = liveData.price || null;
     const bid = liveData.bid || currentPrice;
     const ask = liveData.ask || currentPrice;
@@ -203,6 +239,46 @@ export default function TradingPanel({ livePrices = {} }) {
             setError(err.message || "Cancel failed");
         }
     };
+
+    // ── Positions & Flatten handlers ────────────────────
+    const [positions, setPositions] = useState([]);
+    const [ordersTab, setOrdersTab] = useState("live"); // "live" | "history"
+    const [flatteningId, setFlatteningId] = useState(null);
+
+    const loadPositions = useCallback(() => {
+        panelApi.positions().then(res => {
+            setPositions(res.positions || []);
+        }).catch(console.error);
+    }, []);
+
+    // Auto-refresh live orders + positions every 5s
+    useEffect(() => {
+        loadPositions();
+        const interval = setInterval(() => {
+            loadRecentOrders();
+            loadPositions();
+        }, 5000);
+        return () => clearInterval(interval);
+    }, [loadPositions, loadRecentOrders]);
+
+    const handleFlatten = async (accountId) => {
+        if (!window.confirm("⚠️ This will cancel all working orders and close all positions for this account. Continue?")) return;
+        setFlatteningId(accountId);
+        try {
+            await panelApi.flatten(accountId);
+            loadPositions();
+            loadRecentOrders();
+        } catch (err) {
+            setError(err.message || "Flatten failed");
+        } finally {
+            setFlatteningId(null);
+        }
+    };
+
+    // Split orders into live vs history
+    const liveStates = new Set(["ACCEPTED", "WORKING", "PENDING"]);
+    const liveOrders = recentOrders.filter(o => liveStates.has(o.state?.toUpperCase()));
+    const historyOrders = recentOrders.filter(o => !liveStates.has(o.state?.toUpperCase()));
 
     // ── Format helpers ──────────────────────────────────
     const fmt = (val) => {
@@ -551,63 +627,193 @@ export default function TradingPanel({ livePrices = {} }) {
                 </div>
             )}
 
-            {/* ── Recent Orders ────────────────────────── */}
+            {/* ── Live Orders & History (Tabbed) ───────── */}
             <div className="tp-recent">
                 <div className="tp-recent-header">
-                    <h4>📋 Recent Orders</h4>
-                    <button className="tp-refresh-btn" onClick={loadRecentOrders}>↻</button>
-                </div>
-                {recentOrders.length === 0 ? (
-                    <div className="tp-empty">No orders placed yet</div>
-                ) : (
-                    <div className="tp-orders-table-wrap">
-                        <table className="tp-orders-table">
-                            <thead>
-                                <tr>
-                                    <th>Time</th>
-                                    <th>Account</th>
-                                    <th>Symbol</th>
-                                    <th>Side</th>
-                                    <th>Qty</th>
-                                    <th>Type</th>
-                                    <th>Price</th>
-                                    <th>Status</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {recentOrders.map((o) => (
-                                    <tr key={o.id}>
-                                        <td className="tp-td-time">{fmtTime(o.created_at)}</td>
-                                        <td className="tp-td-acct">{o.account_name || "—"}</td>
-                                        <td className="tp-td-sym">{o.contract || o.instrument_symbol}</td>
-                                        <td className={o.side === "Buy" ? "tp-text-green" : "tp-text-red"}>
-                                            {o.side}
-                                        </td>
-                                        <td>{o.quantity}</td>
-                                        <td>{o.order_type}</td>
-                                        <td>{o.price ? `$${fmt(o.price)}` : "MKT"}</td>
-                                        <td>
-                                            <span className={`tp-status-badge ${o.state?.toLowerCase()}`}>
-                                                {o.state}
-                                            </span>
-                                        </td>
-                                        <td>
-                                            {o.state === "ACCEPTED" && o.broker_order_id && (
-                                                <button
-                                                    className="tp-cancel-order-btn"
-                                                    onClick={() => cancelOrder(o.broker_order_id, o.account_id)}
-                                                    title="Cancel order"
-                                                >✕</button>
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                    <div className="tp-tabs">
+                        <button
+                            className={`tp-tab ${ordersTab === "live" ? "active" : ""}`}
+                            onClick={() => setOrdersTab("live")}
+                        >
+                            🟢 Live Orders
+                            {(liveOrders.length + positions.length) > 0 && (
+                                <span className="tp-tab-badge">{liveOrders.length + positions.length}</span>
+                            )}
+                        </button>
+                        <button
+                            className={`tp-tab ${ordersTab === "history" ? "active" : ""}`}
+                            onClick={() => setOrdersTab("history")}
+                        >
+                            📜 History
+                        </button>
                     </div>
+                    <button className="tp-refresh-btn" onClick={() => { loadRecentOrders(); loadPositions(); }}>↻</button>
+                </div>
+
+                {ordersTab === "live" ? (
+                    <>
+                        {/* Open Positions */}
+                        {positions.length > 0 && (
+                            <div className="tp-positions-section">
+                                <div className="tp-section-label">Open Positions</div>
+                                <div className="tp-orders-table-wrap">
+                                    <table className="tp-orders-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Account</th>
+                                                <th>Side</th>
+                                                <th>Qty</th>
+                                                <th>Entry</th>
+                                                <th>Current</th>
+                                                <th>P&L</th>
+                                                <th></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {positions.map((p, idx) => {
+                                                const mktPrice = currentPrice;
+                                                const pnl = mktPrice && p.net_price
+                                                    ? (p.side === "Long"
+                                                        ? (mktPrice - p.net_price) * p.quantity
+                                                        : (p.net_price - mktPrice) * p.quantity)
+                                                    : null;
+                                                return (
+                                                    <tr key={`pos-${idx}`}>
+                                                        <td className="tp-td-acct">{p.account_name}</td>
+                                                        <td className={p.side === "Long" ? "tp-text-green" : "tp-text-red"}>
+                                                            {p.side}
+                                                        </td>
+                                                        <td>{p.quantity}</td>
+                                                        <td>{p.net_price ? `$${fmt(p.net_price)}` : "—"}</td>
+                                                        <td>{mktPrice ? `$${fmt(mktPrice)}` : "—"}</td>
+                                                        <td>
+                                                            {pnl != null ? (
+                                                                <span className={pnl >= 0 ? "tp-text-green" : "tp-text-red"}>
+                                                                    {pnl >= 0 ? "+" : ""}{fmt(pnl)} pts
+                                                                </span>
+                                                            ) : "—"}
+                                                        </td>
+                                                        <td>
+                                                            <button
+                                                                className="tp-flatten-btn"
+                                                                onClick={() => handleFlatten(p.account_id)}
+                                                                disabled={flatteningId === p.account_id}
+                                                                title="Flatten all positions for this account"
+                                                            >
+                                                                {flatteningId === p.account_id ? "⏳" : "🔴 Flatten"}
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Working Orders */}
+                        {liveOrders.length > 0 ? (
+                            <div className="tp-working-section">
+                                <div className="tp-section-label">Working Orders</div>
+                                <div className="tp-orders-table-wrap">
+                                    <table className="tp-orders-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Time</th>
+                                                <th>Account</th>
+                                                <th>Symbol</th>
+                                                <th>Side</th>
+                                                <th>Qty</th>
+                                                <th>Type</th>
+                                                <th>Price</th>
+                                                <th>Status</th>
+                                                <th></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {liveOrders.map((o) => (
+                                                <tr key={o.id}>
+                                                    <td className="tp-td-time">{fmtTime(o.created_at)}</td>
+                                                    <td className="tp-td-acct">{o.account_name || "—"}</td>
+                                                    <td className="tp-td-sym">{o.contract || o.instrument_symbol}</td>
+                                                    <td className={o.side === "Buy" ? "tp-text-green" : "tp-text-red"}>
+                                                        {o.side}
+                                                    </td>
+                                                    <td>{o.quantity}</td>
+                                                    <td>{o.order_type}</td>
+                                                    <td>{o.price ? `$${fmt(o.price)}` : "MKT"}</td>
+                                                    <td>
+                                                        <span className={`tp-status-badge ${o.state?.toLowerCase()}`}>
+                                                            {o.state}
+                                                        </span>
+                                                    </td>
+                                                    <td>
+                                                        {o.broker_order_id && (
+                                                            <button
+                                                                className="tp-cancel-order-btn"
+                                                                onClick={() => cancelOrder(o.broker_order_id, o.account_id)}
+                                                                title="Cancel order"
+                                                            >✕</button>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        ) : positions.length === 0 && (
+                            <div className="tp-empty">No active orders or positions</div>
+                        )}
+                    </>
+                ) : (
+                    /* History Tab */
+                    historyOrders.length === 0 ? (
+                        <div className="tp-empty">No order history yet</div>
+                    ) : (
+                        <div className="tp-orders-table-wrap">
+                            <table className="tp-orders-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Account</th>
+                                        <th>Symbol</th>
+                                        <th>Side</th>
+                                        <th>Qty</th>
+                                        <th>Type</th>
+                                        <th>Price</th>
+                                        <th>Fill</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {historyOrders.map((o) => (
+                                        <tr key={o.id}>
+                                            <td className="tp-td-time">{fmtTime(o.created_at)}</td>
+                                            <td className="tp-td-acct">{o.account_name || "—"}</td>
+                                            <td className="tp-td-sym">{o.contract || o.instrument_symbol}</td>
+                                            <td className={o.side === "Buy" ? "tp-text-green" : "tp-text-red"}>
+                                                {o.side}
+                                            </td>
+                                            <td>{o.quantity}</td>
+                                            <td>{o.order_type}</td>
+                                            <td>{o.price ? `$${fmt(o.price)}` : "MKT"}</td>
+                                            <td>{o.fill_price ? `$${fmt(o.fill_price)}` : "—"}</td>
+                                            <td>
+                                                <span className={`tp-status-badge ${o.state?.toLowerCase()}`}>
+                                                    {o.state}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )
                 )}
             </div>
         </div>
     );
 }
+

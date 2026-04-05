@@ -271,13 +271,13 @@ def place_panel_order(
     db.flush()
 
     # Create audit log
-    group_name = group.name if group else f"Account #{payload.account_id}"
+    group_name = group.name if group else f"Accounts {payload.account_ids}"
     audit = AuditLog(
         strategy_id=None,
         event_type="PANEL_ORDER",
         details_json=json.dumps({
             "group_id": payload.group_id,
-            "account_id": payload.account_id,
+            "account_ids": payload.account_ids,
             "group_name": group_name,
             "instrument": payload.instrument_symbol,
             "contract": tradovate_symbol,
@@ -414,3 +414,116 @@ def cancel_panel_order(
         return {"success": True, "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Cancel failed: {str(e)}")
+
+
+# ── Open Positions ───────────────────────────────────────
+
+
+class FlattenRequest(BaseModel):
+    account_id: int
+    symbol: Optional[str] = None  # Optional: flatten specific symbol, or all if empty
+
+
+@router.get("/positions")
+def list_open_positions(db: Session = Depends(get_db)):
+    """
+    Fetch open positions from Tradovate for all active accounts.
+    Returns aggregated position data across accounts.
+    """
+    from required_api.tradovate_client import get_proxied_client
+
+    accounts = (
+        db.query(Account)
+        .options(joinedload(Account.credential))
+        .filter(Account.is_active == True)
+        .all()
+    )
+
+    all_positions = []
+    for account in accounts:
+        if not account.credential:
+            continue
+
+        try:
+            user = db.query(User).filter(User.id == account.credential.user_id).first()
+            client = get_proxied_client(user=user)
+            token, err = client.login(account.credential.login_id, account.credential.password)
+            if not token:
+                continue
+
+            positions = client.get_positions(int(account.broker_account_id))
+            for pos in positions:
+                net_pos = pos.get("netPos", 0)
+                if net_pos == 0:
+                    continue
+
+                all_positions.append({
+                    "account_id": account.id,
+                    "account_name": account.name,
+                    "broker_account_id": account.broker_account_id,
+                    "contract_id": pos.get("contractId"),
+                    "net_pos": net_pos,
+                    "net_price": pos.get("netPrice"),
+                    "side": "Long" if net_pos > 0 else "Short",
+                    "quantity": abs(net_pos),
+                    "timestamp": pos.get("timestamp"),
+                })
+        except Exception as e:
+            logger.error(f"Error fetching positions for {account.name}: {e}")
+
+    return {"positions": all_positions, "count": len(all_positions)}
+
+
+# ── Flatten (Close) Position ─────────────────────────────
+
+
+@router.post("/flatten")
+def flatten_position(
+    payload: FlattenRequest,
+    db: Session = Depends(get_db),
+):
+    """Flatten (close all positions and cancel orders) for a specific account."""
+    from required_api.tradovate_client import get_proxied_client
+
+    account = (
+        db.query(Account)
+        .options(joinedload(Account.credential))
+        .filter(Account.id == payload.account_id)
+        .first()
+    )
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if not account.credential:
+        raise HTTPException(status_code=400, detail="Account has no credential")
+
+    cred = account.credential
+    user = db.query(User).filter(User.id == cred.user_id).first()
+    client = get_proxied_client(user=user)
+    token, err = client.login(cred.login_id, cred.password)
+    if not token:
+        raise HTTPException(status_code=400, detail=f"Login failed: {err}")
+
+    try:
+        report = client.flatten_account(
+            account_id=int(account.broker_account_id),
+            account_spec=account.broker_account_name or account.name,
+        )
+
+        # Create audit record
+        audit = AuditLog(
+            strategy_id=None,
+            event_type="PANEL_FLATTEN",
+            details_json=json.dumps({
+                "account_id": account.id,
+                "account_name": account.name,
+                "report": report,
+            }),
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.add(audit)
+        db.commit()
+
+        return {"success": True, "report": report}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Flatten failed: {str(e)}")
+
