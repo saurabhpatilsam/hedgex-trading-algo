@@ -535,11 +535,12 @@ class TradovateClient:
             raise
 
         # 2. Quick WebSocket quote fetch
-        result = {"symbol": symbol, "last_price": None, "bid": None, "ask": None}
+        result = {"symbol": symbol, "last_price": None, "bid": None, "ask": None, "debug_msgs": []}
         got_price = threading.Event()
         ws_errors = []
 
         def on_message(ws, message):
+            result["debug_msgs"].append(message)
             try:
                 # Tradovate WS messages have format: "type\nid\nbody"
                 parts = message.split("\n", 2)
@@ -586,8 +587,8 @@ class TradovateClient:
         ws_thread.daemon = True
         ws_thread.start()
 
-        # Wait up to 5 seconds for a price
-        got_price.wait(timeout=5.0)
+        # Wait up to 15 seconds for a price
+        got_price.wait(timeout=15.0)
         try:
             ws.close()
         except Exception:
@@ -601,7 +602,7 @@ class TradovateClient:
             result["last_price"] = round((result["bid"] + result["ask"]) / 2, 4)
 
         if result["last_price"] is None:
-            raise RuntimeError(f"Could not get price for {symbol} (market may be closed)")
+            raise RuntimeError(f"Could not get price for {symbol}. WS Debug: {result['debug_msgs']}")
 
         logger.info(f"Last price for {symbol}: {result['last_price']}")
         return result
