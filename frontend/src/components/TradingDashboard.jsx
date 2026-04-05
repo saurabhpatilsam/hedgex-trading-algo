@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { tradingApi, marketApi } from "../api";
+import TradingPanel from "./TradingPanel";
 
 export default function TradingDashboard() {
     const [strategies, setStrategies] = useState([]);
@@ -392,6 +393,9 @@ export default function TradingDashboard() {
 
             {/* ── Live Instrument Cards ───────────────────── */}
             <InstrumentCards />
+
+            {/* ── Trading Panel ──────────────────────────── */}
+            <TradingPanel livePrices={livePrices} />
 
             {/* ── Navigation Tabs ────────────────────────── */}
             <div className="td-tabs">

@@ -4180,3 +4180,745 @@ h6 {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+
+/* ══════════════════════════════════════════════════════════
+   TRADING PANEL — NinjaTrader-inspired professional UI
+   ══════════════════════════════════════════════════════════ */
+
+.trading-panel {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: var(--glass-shadow), 0 0 60px rgba(99, 102, 241, 0.04);
+  overflow: hidden;
+  margin-top: 24px;
+  animation: pageIn 0.4s var(--ease);
+}
+
+/* ── Header ──────────────────────────────────── */
+.tp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--bg-4);
+  background: rgba(99, 102, 241, 0.04);
+}
+
+.tp-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tp-icon {
+  font-size: 20px;
+  filter: drop-shadow(0 0 6px rgba(99, 102, 241, 0.5));
+}
+
+.tp-title h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--white);
+  letter-spacing: -0.3px;
+}
+
+.tp-group-select {
+  background: var(--bg-3);
+  color: var(--white);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  padding: 8px 14px;
+  font-size: 13px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+  min-width: 200px;
+  transition: border-color 0.2s;
+}
+
+.tp-group-select:hover,
+.tp-group-select:focus {
+  border-color: var(--accent-primary);
+}
+
+/* ── Instrument Row ──────────────────────────── */
+.tp-instrument-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--bg-4);
+  gap: 16px;
+}
+
+.tp-instrument-select {
+  background: var(--bg-3);
+  color: var(--white);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  padding: 8px 14px;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+  flex: 1;
+  max-width: 300px;
+  transition: border-color 0.2s;
+}
+
+.tp-instrument-select:hover,
+.tp-instrument-select:focus {
+  border-color: var(--accent-primary);
+}
+
+.tp-live-price {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tp-price-label {
+  font-size: 11px;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.tp-price-value {
+  font-size: 22px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--white);
+}
+
+.tp-price-value.up {
+  color: var(--accent-green);
+}
+
+.tp-price-value.down {
+  color: var(--accent-red);
+}
+
+.tp-change {
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.tp-change.up {
+  color: var(--accent-green);
+  background: var(--accent-green-dim);
+}
+
+.tp-change.down {
+  color: var(--accent-red);
+  background: var(--accent-red-dim);
+}
+
+/* ── Order Type Tabs ─────────────────────────── */
+.tp-order-types {
+  display: flex;
+  padding: 12px 20px;
+  gap: 6px;
+  border-bottom: 1px solid var(--bg-4);
+}
+
+.tp-ot-btn {
+  flex: 1;
+  padding: 10px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  background: var(--bg-3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  color: var(--gray-400);
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+
+.tp-ot-btn:hover {
+  background: var(--bg-4);
+  color: var(--white);
+  border-color: var(--glass-border-hover);
+}
+
+.tp-ot-btn.active {
+  background: var(--accent-primary-dim);
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 16px rgba(99, 102, 241, 0.15);
+}
+
+/* ── Controls (Qty + Price) ──────────────────── */
+.tp-controls {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--bg-4);
+}
+
+.tp-qty-section,
+.tp-price-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tp-qty-section label,
+.tp-price-section label {
+  font-size: 11px;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  font-weight: 600;
+}
+
+.tp-qty-stepper {
+  display: flex;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+
+.tp-qty-stepper button {
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: var(--bg-4);
+  color: var(--white);
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.tp-qty-stepper button:hover {
+  background: var(--bg-5);
+}
+
+.tp-qty-stepper input {
+  width: 60px;
+  height: 40px;
+  border: none;
+  border-left: 1px solid var(--glass-border);
+  border-right: 1px solid var(--glass-border);
+  background: var(--bg-3);
+  color: var(--white);
+  font-size: 16px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  text-align: center;
+  outline: none;
+}
+
+.tp-price-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.tp-price-input-wrap:focus-within {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.15);
+}
+
+.tp-currency {
+  padding: 0 10px;
+  color: var(--gray-500);
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--bg-4);
+  height: 40px;
+  display: flex;
+  align-items: center;
+}
+
+.tp-price-input {
+  width: 140px;
+  height: 40px;
+  border: none;
+  background: var(--bg-3);
+  color: var(--white);
+  font-size: 16px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 0 12px;
+  outline: none;
+}
+
+.tp-price-snap {
+  width: 36px;
+  height: 40px;
+  border: none;
+  background: var(--bg-4);
+  color: var(--gray-400);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tp-price-snap:hover {
+  background: var(--accent-primary-dim);
+  color: var(--accent-primary);
+}
+
+/* ── Buy / Sell Buttons ──────────────────────── */
+.tp-action-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 16px 20px;
+}
+
+.tp-buy-btn,
+.tp-sell-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 18px 24px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: 'Inter', sans-serif;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+  position: relative;
+  overflow: hidden;
+}
+
+.tp-buy-btn {
+  background: linear-gradient(135deg, #059669, #10b981);
+  box-shadow: 0 4px 20px rgba(16, 185, 129, 0.25);
+}
+
+.tp-buy-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(16, 185, 129, 0.4);
+}
+
+.tp-sell-btn {
+  background: linear-gradient(135deg, #dc2626, #f43f5e);
+  box-shadow: 0 4px 20px rgba(244, 63, 94, 0.25);
+}
+
+.tp-sell-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(244, 63, 94, 0.4);
+}
+
+.tp-buy-btn:disabled,
+.tp-sell-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.tp-btn-label {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--white);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+.tp-btn-price {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── Summary Bar ─────────────────────────────── */
+.tp-summary-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--bg-4);
+  border-bottom: 1px solid var(--bg-4);
+  font-size: 12px;
+  color: var(--gray-400);
+}
+
+.tp-sum-item strong {
+  color: var(--white);
+  font-weight: 700;
+}
+
+.tp-sum-sep {
+  color: var(--gray-600);
+  font-weight: 300;
+}
+
+.tp-sum-total strong {
+  color: var(--accent-primary);
+  font-size: 14px;
+}
+
+.tp-sum-warn {
+  color: var(--gray-500);
+  font-style: italic;
+}
+
+/* ── Banners (Error / Result) ────────────────── */
+.tp-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  animation: slideDown 0.3s var(--ease);
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.tp-banner button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+  opacity: 0.6;
+}
+
+.tp-banner button:hover {
+  opacity: 1;
+}
+
+.tp-error {
+  background: var(--accent-red-dim);
+  color: var(--accent-red);
+  border-top: 1px solid rgba(244, 63, 94, 0.3);
+}
+
+.tp-success {
+  background: var(--accent-green-dim);
+  color: var(--accent-green);
+  border-top: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.tp-warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--accent-warning);
+  border-top: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+/* ── Confirmation Modal ──────────────────────── */
+.tp-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.tp-confirm-modal {
+  background: var(--bg-2);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 420px;
+  max-width: 90vw;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+  animation: modalIn 0.3s var(--ease);
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.tp-confirm-modal h4 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--white);
+  margin-bottom: 20px;
+  letter-spacing: -0.3px;
+}
+
+.tp-confirm-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.tp-cd-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--bg-4);
+}
+
+.tp-cd-row>span:first-child {
+  color: var(--gray-500);
+}
+
+.tp-cd-row>span:last-child {
+  color: var(--white);
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.tp-cd-highlight {
+  background: rgba(99, 102, 241, 0.04);
+  margin: 0 -12px;
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+
+.tp-cd-divider {
+  height: 1px;
+  background: var(--bg-5);
+  margin: 8px 0;
+}
+
+.tp-text-green {
+  color: var(--accent-green) !important;
+}
+
+.tp-text-red {
+  color: var(--accent-red) !important;
+}
+
+.tp-text-accent {
+  color: var(--accent-primary) !important;
+}
+
+.tp-confirm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.tp-cancel-btn {
+  flex: 1;
+  padding: 12px;
+  background: var(--bg-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  color: var(--gray-400);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tp-cancel-btn:hover {
+  background: var(--bg-5);
+  color: var(--white);
+}
+
+.tp-execute-btn {
+  flex: 2;
+  padding: 12px;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--white);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+
+.tp-execute-btn.buy {
+  background: linear-gradient(135deg, #059669, #10b981);
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.3);
+}
+
+.tp-execute-btn.sell {
+  background: linear-gradient(135deg, #dc2626, #f43f5e);
+  box-shadow: 0 4px 16px rgba(244, 63, 94, 0.3);
+}
+
+.tp-execute-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.tp-execute-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Recent Orders ───────────────────────────── */
+.tp-recent {
+  padding: 16px 20px;
+}
+
+.tp-recent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.tp-recent-header h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-400);
+  letter-spacing: -0.2px;
+}
+
+.tp-refresh-btn {
+  background: none;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  color: var(--gray-500);
+  padding: 4px 10px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tp-refresh-btn:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.tp-empty {
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--gray-600);
+  font-size: 13px;
+  font-style: italic;
+}
+
+.tp-orders-table-wrap {
+  overflow-x: auto;
+}
+
+.tp-orders-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.tp-orders-table thead th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--gray-600);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  border-bottom: 1px solid var(--bg-4);
+}
+
+.tp-orders-table tbody tr {
+  border-bottom: 1px solid var(--bg-3);
+  transition: background 0.15s;
+}
+
+.tp-orders-table tbody tr:hover {
+  background: var(--bg-3);
+}
+
+.tp-orders-table td {
+  padding: 8px 10px;
+  color: var(--gray-300);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+.tp-td-time {
+  color: var(--gray-500);
+}
+
+.tp-td-sym {
+  font-weight: 600;
+  color: var(--white);
+}
+
+.tp-status-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tp-status-badge.accepted,
+.tp-status-badge.working {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+}
+
+.tp-status-badge.filled {
+  background: var(--accent-green-dim);
+  color: var(--accent-green);
+}
+
+.tp-status-badge.cancelled,
+.tp-status-badge.rejected {
+  background: var(--accent-red-dim);
+  color: var(--accent-red);
+}
+
+.tp-cancel-order-btn {
+  background: none;
+  border: 1px solid var(--accent-red);
+  border-radius: 4px;
+  color: var(--accent-red);
+  font-size: 11px;
+  padding: 2px 6px;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: all 0.15s;
+}
+
+.tp-cancel-order-btn:hover {
+  opacity: 1;
+  background: var(--accent-red-dim);
+}

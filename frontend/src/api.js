@@ -218,3 +218,15 @@ export const tradingApi = {
     runnerStatus: () => request("/trading/runner/status"),
 };
 
+// ── Trading Panel (Manual Orders) ──────────────────────────
+export const panelApi = {
+    placeOrder: (data) =>
+        request("/panel/order", { method: "POST", body: JSON.stringify(data) }),
+    listOrders: (limit = 50) =>
+        request(`/panel/orders?limit=${limit}`),
+    cancelOrder: (brokerOrderId, accountId) =>
+        request("/panel/cancel", {
+            method: "POST",
+            body: JSON.stringify({ broker_order_id: brokerOrderId, account_id: accountId }),
+        }),
+};

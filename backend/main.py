@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import Base, engine
-from routers import accounts, groups, instruments, strategy, users, trading, market_data, market
+from routers import accounts, groups, instruments, strategy, users, trading, market_data, market, panel_orders
 import models_market_data  # Ensure market data tables are registered with Base
 
 # Configure logging
@@ -65,6 +65,7 @@ app.include_router(strategy.router)      # Legacy strategy endpoints
 app.include_router(trading.router)        # New trading system endpoints
 app.include_router(market_data.router)    # Market data collection & backtesting
 app.include_router(market.router)          # Live market data (SSE streaming)
+app.include_router(panel_orders.router)    # Trading panel manual orders
 
 
 @app.get("/")
