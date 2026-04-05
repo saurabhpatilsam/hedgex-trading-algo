@@ -161,6 +161,9 @@ export default function TradingDashboard() {
         };
     }, []);
 
+    // ── Instrument Cards Component ──────────────────────
+    const FALLBACK_INSTRUMENTS = ['ESH6', 'GCG6', 'MESH6', 'MGCG6', 'MNQH6', 'NQH6'];
+
     // Fallback: if SSE not working, poll prices every 3s via cached Redis, then direct REST
     const fallbackSymbolsRef = useRef(FALLBACK_INSTRUMENTS);
     useEffect(() => {
@@ -191,9 +194,6 @@ export default function TradingDashboard() {
         }, 5000);
         return () => clearInterval(fallback);
     }, [sseConnected]);
-
-    // ── Instrument Cards Component ──────────────────────
-    const FALLBACK_INSTRUMENTS = ['ESH6', 'GCG6', 'MESH6', 'MGCG6', 'MNQH6', 'NQH6'];
 
     const InstrumentCards = () => {
         // Get all instruments from MD status, livePrices, or fallback
