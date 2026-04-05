@@ -178,7 +178,7 @@ async def get_md_status():
 
 
 @router.get("/live-quote")
-async def get_live_quote(symbol: str = Query(..., description="Contract symbol e.g. NQU5")):
+def get_live_quote(symbol: str = Query(..., description="Contract symbol e.g. NQU5")):
     """
     Fetch live quote directly from Tradovate REST/WS API.
 
