@@ -542,23 +542,22 @@ class TradovateClient:
         def on_message(ws, message):
             result["debug_msgs"].append(message)
             try:
-                # Tradovate WS messages have format: "type\nid\nbody"
-                parts = message.split("\n", 2)
-                if len(parts) >= 3:
-                    msg_type = parts[0].strip()
-                    body = parts[2].strip() if parts[2].strip() else "{}"
-                    if body.startswith("{") or body.startswith("["):
-                        data = json_mod.loads(body)
-                        # Quote data has entries with Trade, Bid, Ask
-                        entries = data.get("entries", {}) if isinstance(data, dict) else {}
-                        if "Trade" in entries:
-                            result["last_price"] = entries["Trade"].get("price")
-                        if "Bid" in entries:
-                            result["bid"] = entries["Bid"].get("price")
-                        if "Ask" in entries:
-                            result["ask"] = entries["Ask"].get("price")
-                        if result["last_price"] is not None or result["bid"] is not None:
-                            got_price.set()
+                # Market data WS is Socket.IO-like, messages start with a[...
+                if message.startswith("a["):
+                    payloads = json_mod.loads(message[1:])
+                    for data in payloads:
+                        if data.get("e") == "md":
+                            quotes = data.get("d", {}).get("quotes", [])
+                            if quotes:
+                                entries = quotes[0].get("entries", {})
+                                if "Trade" in entries:
+                                    result["last_price"] = entries["Trade"].get("price")
+                                if "Bid" in entries:
+                                    result["bid"] = entries["Bid"].get("price")
+                                if "Offer" in entries:
+                                    result["ask"] = entries["Offer"].get("price")
+                                if result["last_price"] is not None or result["bid"] is not None:
+                                    got_price.set()
             except Exception as e:
                 logger.debug(f"WS parse error: {e}")
 
