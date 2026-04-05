@@ -228,110 +228,57 @@ export default function TradingPanel({ livePrices = {} }) {
 
     return (
         <div className="trading-panel tp-v2">
-            {/* ── Header: Title + Mode Selectors ──────── */}
+            {/* ── Header: Title ──────── */}
             <div className="tp-header">
                 <div className="tp-title">
                     <span className="tp-icon">⚡</span>
                     <h3>Trading Panel</h3>
                 </div>
-                <div className="tp-selectors">
-                    <div className="tp-selector-group">
-                        <label className="tp-sel-label">GROUP</label>
-                        <select
-                            className={`tp-group-select ${tradingMode === "group" ? "active-mode" : ""}`}
-                            value={tradingMode === "group" ? (selectedGroupId || "") : ""}
-                            onChange={(e) => switchToGroup(e.target.value)}
-                        >
-                            <option value="">Select Group</option>
-                            {groups.map((g) => (
-                                <option key={g.id} value={g.id}>
-                                    {g.name} ({g.members?.length || 0})
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-                    <span className="tp-or-sep">OR</span>
-                    <div className="tp-selector-group">
-                        <label className="tp-sel-label">ACCOUNT</label>
-                        <select
-                            className={`tp-group-select ${tradingMode === "account" ? "active-mode" : ""}`}
-                            value=""
-                            onChange={(e) => switchToAccount(e.target.value)}
-                        >
-                            <option value="">Select Account</option>
-                            {accountsByUser.map((ug) => (
-                                <optgroup key={ug.user.id} label={`👤 ${ug.user.name}`}>
-                                    {ug.accounts.map((a) => (
-                                        <option key={a.id} value={a.id}>
-                                            {a.name}
-                                        </option>
-                                    ))}
-                                </optgroup>
-                            ))}
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            {/* ── Instrument + Live Price ─────────────── */}
-            <div className="tp-instrument-row">
-                <div className="tp-inst-left">
-                    <select
-                        className="tp-instrument-select"
-                        value={selectedInstrument?.id || ""}
-                        onChange={(e) => {
-                            const inst = instruments.find((i) => i.id === parseInt(e.target.value));
-                            setSelectedInstrument(inst || null);
-                            setPrice("");
-                            setStopPrice("");
-                        }}
-                    >
-                        <option value="">Select Instrument</option>
-                        {instruments.map((inst) => (
-                            <option key={inst.id} value={inst.id}>
-                                {inst.contract_month || inst.symbol}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-
-                {/* F2: Big Prominent Live Price */}
-                <div
-                    className={`tp-live-price-big ${orderType !== "Market" ? "tp-price-clickable" : ""}`}
-                    onClick={orderType !== "Market" ? handlePriceClick : undefined}
-                    title={orderType !== "Market" ? "Click to auto-fill price" : ""}
-                >
-                    <span className="tp-lpb-label">LIVE PRICE</span>
-                    <div className="tp-lpb-value-box">
-                        <span className={`tp-lpb-value ${change > 0 ? "up" : change < 0 ? "down" : ""} ${priceFlash ? "flash" : ""}`}>
-                            {currentPrice ? fmt(currentPrice) : "—"}
-                        </span>
-                        {change !== 0 && (
-                            <span className={`tp-lpb-change ${change > 0 ? "up" : "down"}`}>
-                                {change > 0 ? "▲" : "▼"} {fmt(Math.abs(change))}
-                            </span>
-                        )}
-                    </div>
-                </div>
             </div>
 
             {/* ── Compact Controls Grid ───────────────── */}
-            <div className="tp-controls-grid">
-                {/* Left: Order Type + Qty + Price */}
+            <div className="tp-controls-grid tp-v3-layout">
+                {/* Left: Instrument + Qty + Order Types */}
                 <div className="tp-left-col">
-                    <div className="tp-order-types">
-                        {orderTypes.map((ot) => (
-                            <button
-                                key={ot}
-                                className={`tp-ot-btn ${orderType === ot ? "active" : ""}`}
-                                onClick={() => {
-                                    setOrderType(ot);
-                                    if (ot === "Market") { setPrice(""); setStopPrice(""); }
+                    <div className="tp-instrument-row">
+                        <div className="tp-inst-left">
+                            <select
+                                className="tp-instrument-select"
+                                value={selectedInstrument?.id || ""}
+                                onChange={(e) => {
+                                    const inst = instruments.find((i) => i.id === parseInt(e.target.value));
+                                    setSelectedInstrument(inst || null);
+                                    setPrice("");
+                                    setStopPrice("");
                                 }}
                             >
-                                {ot === "StopLimit" ? "STP LMT" : ot.toUpperCase()}
-                            </button>
-                        ))}
+                                <option value="">Select Instrument</option>
+                                {instruments.map((inst) => (
+                                    <option key={inst.id} value={inst.id}>
+                                        {inst.contract_month || inst.symbol}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {/* F2: Big Prominent Live Price */}
+                        <div
+                            className={`tp-live-price-big ${orderType !== "Market" ? "tp-price-clickable" : ""}`}
+                            onClick={orderType !== "Market" ? handlePriceClick : undefined}
+                            title={orderType !== "Market" ? "Click to auto-fill price" : ""}
+                        >
+                            <span className="tp-lpb-label">LIVE PRICE</span>
+                            <div className="tp-lpb-value-box">
+                                <span className={`tp-lpb-value ${change > 0 ? "up" : change < 0 ? "down" : ""} ${priceFlash ? "flash" : ""}`}>
+                                    {currentPrice ? fmt(currentPrice) : "—"}
+                                </span>
+                                {change !== 0 && (
+                                    <span className={`tp-lpb-change ${change > 0 ? "up" : "down"}`}>
+                                        {change > 0 ? "▲" : "▼"} {fmt(Math.abs(change))}
+                                    </span>
+                                )}
+                            </div>
+                        </div>
                     </div>
 
                     <div className="tp-inputs-row">
@@ -399,36 +346,92 @@ export default function TradingPanel({ livePrices = {} }) {
                             </div>
                         )}
                     </div>
+
+                    <div className="tp-order-types">
+                        {orderTypes.map((ot) => (
+                            <button
+                                key={ot}
+                                className={`tp-ot-btn ${orderType === ot ? "active" : ""}`}
+                                onClick={() => {
+                                    setOrderType(ot);
+                                    if (ot === "Market") { setPrice(""); setStopPrice(""); }
+                                }}
+                            >
+                                {ot === "StopLimit" ? "STP LMT" : ot.toUpperCase()}
+                            </button>
+                        ))}
+                    </div>
                 </div>
 
-                {/* Right: Actions */}
+                {/* Right: Group/Account Selectors + Actions */}
                 <div className="tp-right-col">
-                    <div className="tp-skip-confirm-wrap">
-                        <input
-                            type="checkbox"
-                            id="skipConfirmation"
-                            checked={skipConfirmation}
-                            onChange={(e) => setSkipConfirmation(e.target.checked)}
-                        />
-                        <label htmlFor="skipConfirmation">Fast trading (skip confirmation)</label>
+                    <div className="tp-selectors">
+                        <div className="tp-selector-group">
+                            <label className="tp-sel-label">GROUP</label>
+                            <select
+                                className={`tp-group-select ${tradingMode === "group" ? "active-mode" : ""}`}
+                                value={tradingMode === "group" ? (selectedGroupId || "") : ""}
+                                onChange={(e) => switchToGroup(e.target.value)}
+                            >
+                                <option value="">Select Group</option>
+                                {groups.map((g) => (
+                                    <option key={g.id} value={g.id}>
+                                        {g.name} ({g.members?.length || 0})
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <span className="tp-or-sep">OR</span>
+                        <div className="tp-selector-group">
+                            <label className="tp-sel-label">ACCOUNT</label>
+                            <select
+                                className={`tp-group-select ${tradingMode === "account" ? "active-mode" : ""}`}
+                                value=""
+                                onChange={(e) => switchToAccount(e.target.value)}
+                            >
+                                <option value="">Select Account</option>
+                                {accountsByUser.map((ug) => (
+                                    <optgroup key={ug.user.id} label={`👤 ${ug.user.name}`}>
+                                        {ug.accounts.map((a) => (
+                                            <option key={a.id} value={a.id}>
+                                                {selectedAccountIds.includes(a.id) ? "✓ " : ""}{a.name}
+                                            </option>
+                                        ))}
+                                    </optgroup>
+                                ))}
+                            </select>
+                        </div>
                     </div>
 
-                    <button
-                        className="tp-buy-btn"
-                        onClick={() => handleOrderClick("Buy")}
-                        disabled={isPlacing || !canTrade}
-                    >
-                        <span className="tp-btn-label">BUY</span>
-                        <span className="tp-btn-price">{ask ? fmt(ask) : "—"}</span>
-                    </button>
-                    <button
-                        className="tp-sell-btn"
-                        onClick={() => handleOrderClick("Sell")}
-                        disabled={isPlacing || !canTrade}
-                    >
-                        <span className="tp-btn-label">SELL</span>
-                        <span className="tp-btn-price">{bid ? fmt(bid) : "—"}</span>
-                    </button>
+                    <div className="tp-action-buttons">
+                        <div className="tp-skip-confirm-wrap">
+                            <input
+                                type="checkbox"
+                                id="skipConfirmation"
+                                checked={skipConfirmation}
+                                onChange={(e) => setSkipConfirmation(e.target.checked)}
+                            />
+                            <label htmlFor="skipConfirmation">Fast trading (skip confirmation)</label>
+                        </div>
+                        <div className="tp-actions-row">
+                            <button
+                                className="tp-buy-btn"
+                                onClick={() => handleOrderClick("Buy")}
+                                disabled={isPlacing || !canTrade}
+                            >
+                                <span className="tp-btn-label">BUY</span>
+                                <span className="tp-btn-price">{ask ? fmt(ask) : "—"}</span>
+                            </button>
+                            <button
+                                className="tp-sell-btn"
+                                onClick={() => handleOrderClick("Sell")}
+                                disabled={isPlacing || !canTrade}
+                            >
+                                <span className="tp-btn-label">SELL</span>
+                                <span className="tp-btn-price">{bid ? fmt(bid) : "—"}</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
