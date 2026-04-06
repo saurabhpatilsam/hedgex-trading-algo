@@ -812,7 +812,7 @@ def get_proxied_client(user=None, user_id: int = None, proxy_region: str = None)
         region = proxy_region
 
     # Priority 1: Per-user VM proxy URL
-    if uid and proxy_url:
+    if False and proxy_url:
         logger.info(f"Creating proxied client: user={uid}, proxy_url={proxy_url}")
         return TradovateClient(proxy_url=proxy_url, user_id=uid)
 
