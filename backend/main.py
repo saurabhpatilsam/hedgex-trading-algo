@@ -30,11 +30,18 @@ async def lifespan(app: FastAPI):
     # Start the background strategy runner
     from engine.runner import start_runner, stop_runner
     await start_runner()
+    
+    # Start continuous WebSocket market data feed
+    from engine.market_feed import MarketFeedManager
+    feed_manager = MarketFeedManager()
+    await feed_manager.start()
+    
     logger.info("🚀 Trading system initialized")
 
     yield
 
     # Shutdown
+    feed_manager._running = False
     await stop_runner()
     logger.info("Trading system shutdown complete")
 
