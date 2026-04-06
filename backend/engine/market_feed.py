@@ -14,7 +14,7 @@ from redis import Redis
 from required_api.tradovate_client import TradovateClient
 from database import SessionLocal
 from models import BrokerCredential, Instrument
-from database import get_redis
+from routers.market import get_redis
 
 logger = logging.getLogger(__name__)
 
