@@ -178,16 +178,34 @@ async def get_md_status():
 
 
 @router.get("/live-quote")
-def get_live_quote(symbol: str = Query(..., description="Contract symbol e.g. NQU5")):
+def get_live_quote(symbol: str = Query(..., description="Contract symbol e.g. NQM6")):
     """
-    Fetch live quote directly from Tradovate REST/WS API.
+    Fetch live quote for a symbol.
 
-    This is a fallback when the hedgex-md service / Redis pipeline is down.
-    Uses the first active credential to authenticate and fetch the last price.
+    Priority:
+      1. Redis hx:prices hash (fed by MarketFeedManager WebSocket — zero logins needed)
+      2. Direct Tradovate API (fallback — shares Redis-backed token cache)
     """
-    from sqlalchemy.orm import Session
+    # 1. Try Redis first (no login needed, shared across all callers)
+    try:
+        r = get_redis()
+        cached = r.hget("hx:prices", symbol)
+        if cached:
+            tick = json.loads(cached)
+            return {
+                "symbol": symbol,
+                "price": tick.get("price"),
+                "bid": tick.get("bid"),
+                "ask": tick.get("ask"),
+                "change": 0,
+                "source": "redis",
+            }
+    except Exception:
+        pass
+
+    # 2. Fallback: direct Tradovate API (uses Redis-cached token to avoid 429)
     from database import SessionLocal
-    from models import BrokerCredential, User
+    from models import BrokerCredential
     from required_api.tradovate_client import TradovateClient
 
     db = SessionLocal()
@@ -199,7 +217,6 @@ def get_live_quote(symbol: str = Query(..., description="Contract symbol e.g. NQ
         if not cred:
             return {"symbol": symbol, "error": "No active credentials", "price": None}
 
-        # Market data polling does not require IP binding, so we use a direct client
         client = TradovateClient()
         token, err = client.login(cred.login_id, cred.password)
 
@@ -220,4 +237,5 @@ def get_live_quote(symbol: str = Query(..., description="Contract symbol e.g. NQ
         return {"symbol": symbol, "error": str(e), "price": None}
     finally:
         db.close()
+
 
