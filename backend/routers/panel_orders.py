@@ -213,11 +213,6 @@ def place_panel_order(
         client = cached["client"]
 
         try:
-            # Determine order price
-            order_price = payload.price
-            if payload.order_type == "Stop":
-                order_price = payload.stop_price
-
             result = client.place_order(
                 account_id=account.tradovate_account_id,
                 account_spec=account.name,
@@ -225,7 +220,8 @@ def place_panel_order(
                 action=payload.action,
                 qty=payload.quantity,
                 order_type=payload.order_type,
-                price=order_price,
+                price=payload.price,
+                stop_price=payload.stop_price,
             )
 
             # Extract broker order ID from response

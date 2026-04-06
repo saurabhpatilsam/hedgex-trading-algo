@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 import urllib.parse
 from typing import Optional, Dict, List, Any
@@ -8,6 +9,18 @@ from datetime import datetime, timezone
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+
+def _get_redis():
+    """Lazy Redis singleton shared by all token-cache callers."""
+    global _redis_instance
+    if _redis_instance is None:
+        from redis import Redis
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        _redis_instance = Redis.from_url(redis_url, decode_responses=True)
+    return _redis_instance
+
+_redis_instance = None
 
 # Constants
 AUTH_URL = "https://tv-demo.tradovateapi.com/authorize?locale=en"
@@ -23,8 +36,8 @@ PROXY_URLS = {
     "uk": os.getenv("PROXY_URL_UK", "http://20.50.127.77:9000"),
 }
 
-# Global Token Cache to prevent Tradovate from throwing HTTP 429 on constant polling
-_TOKEN_CACHE = {} 
+# Redis-backed token cache key prefix (shared across all uvicorn workers)
+_TOKEN_CACHE_PREFIX = "hx:token:"
 
 
 class TradovateClient:
@@ -41,7 +54,7 @@ class TradovateClient:
         self.user_id = user_id
 
     def _log_request_to_db(self, method: str, url: str, status_code: int, request_payload: str, response_snippet: str):
-        """Helper to log API request and response data to the database."""
+        """Log API request to DB. Non-fatal — will silently skip if DB pool is exhausted."""
         try:
             from database import SessionLocal
             from models import RequestLog
@@ -59,10 +72,13 @@ class TradovateClient:
                 )
                 db.add(log_entry)
                 db.commit()
+            except Exception:
+                db.rollback()
             finally:
                 db.close()
-        except Exception as e:
-            logger.error(f"Failed to log request to DB: {e}")
+        except Exception:
+            # Silently skip — never let logging crash the hot path
+            pass
 
     def _proxied_request(self, method: str, url: str, headers: Dict = None,
                          data: Any = None, json_body: Any = None,
@@ -162,32 +178,68 @@ class TradovateClient:
 
     def login(self, username: str, password: str) -> tuple[Optional[str], Optional[str]]:
         """
-        Authenticate with Tradovate. Uses a local cache to prevent 429s.
+        Authenticate with Tradovate using a **Redis-backed** global token cache.
+        
+        Architecture:
+          - All uvicorn workers share the same Redis, so a token cached by
+            worker-0 is immediately usable by worker-1/2/3.
+          - Tokens are cached for 25 minutes (Tradovate tokens last ~2h).
+          - A 429 cooldown key prevents all workers from retrying for 90 seconds.
+        
         Returns (token, error_message).
         """
         self.username = username
-        
-        # Check global cache
-        global _TOKEN_CACHE
-        if username in _TOKEN_CACHE:
-            cached_data = _TOKEN_CACHE[username]
-            # Tradovate tokens last ~2h; cache for 30min to avoid 429 rate limit
-            if time.time() - cached_data.get("timestamp", 0) < 1800:
-                self.access_token = cached_data["token"]
-                logger.info(f"Using cached token for {username}")
-                return self.access_token, None
-                
+        cache_key = f"{_TOKEN_CACHE_PREFIX}{username}"
+
+        try:
+            r = _get_redis()
+
+            # 1. Check Redis cache (shared across all workers)
+            cached_raw = r.get(cache_key)
+            if cached_raw:
+                try:
+                    cached_data = json.loads(cached_raw)
+                    if cached_data.get("expires_at", 0) > time.time():
+                        self.access_token = cached_data["token"]
+                        logger.info(f"Using Redis-cached token for {username}")
+                        return self.access_token, None
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            # 2. Check 429 cooldown (shared across all workers)
+            cooldown_key = f"hx:login_cooldown:{username}"
+            if r.get(cooldown_key):
+                err_msg = f"Login cooldown active for {username}. Skipping."
+                logger.warning(err_msg)
+                return None, err_msg
+
+        except Exception as redis_err:
+            # Redis down — fall through to attempt login anyway
+            logger.warning(f"Redis cache unavailable: {redis_err}")
+
+        # 3. Fresh login
         payload = self._build_auth_payload(username, password)
         headers = self._build_tv_headers()
 
         try:
             logger.info(f"Attempting fresh login for user: {username}")
             response = self._proxied_request("POST", AUTH_URL, headers=headers, data=payload, timeout=15)
-            
+
+            if response.status_code == 429:
+                err_msg = f"Login HTTP Error 429: rate-limited"
+                logger.error(err_msg)
+                # Set cooldown so ALL workers stop trying for 90 seconds
+                try:
+                    r = _get_redis()
+                    r.setex(f"hx:login_cooldown:{username}", 90, "1")
+                except Exception:
+                    pass
+                return None, err_msg
+
             if response.status_code != 200:
-                 err_msg = f"Login HTTP Error {response.status_code}: {response.text}"
-                 logger.error(err_msg)
-                 return None, err_msg
+                err_msg = f"Login HTTP Error {response.status_code}: {response.text}"
+                logger.error(err_msg)
+                return None, err_msg
 
             data = response.json()
 
@@ -195,9 +247,18 @@ class TradovateClient:
                 token = data.get("d", {}).get("access_token")
                 if token:
                     self.access_token = token
-                    # Cache the token globally
-                    _TOKEN_CACHE[username] = {"token": token, "timestamp": time.time()}
-                    logger.info(f"Login successful for {username}. Token cached.")
+                    # Cache in Redis — shared across all workers, 25 minute TTL
+                    try:
+                        r = _get_redis()
+                        token_data = json.dumps({
+                            "token": token,
+                            "expires_at": time.time() + 1500,
+                            "cached_by": f"worker-{os.getpid()}",
+                        })
+                        r.setex(cache_key, 1500, token_data)
+                    except Exception:
+                        pass  # Redis failure is non-fatal; token still works locally
+                    logger.info(f"Login successful for {username}. Token cached in Redis (25m).")
                     return token, None
                 else:
                     err_msg = "Login successful but no token in response"
@@ -212,8 +273,6 @@ class TradovateClient:
             err_msg = f"Login error: {str(e)}"
             logger.error(err_msg)
             return None, err_msg
-        
-        return None, "Unknown error"
 
     def get_subaccounts(self) -> List[Dict[str, Any]]:
         """
@@ -451,6 +510,7 @@ class TradovateClient:
         qty: int = 1,
         order_type: str = "Market",
         price: float = None,
+        stop_price: float = None,
     ) -> Dict[str, Any]:
         """
         Place an order via Tradovate API.
@@ -485,12 +545,18 @@ class TradovateClient:
             "isAutomated": True,
         }
 
-        # Add price for Limit/Stop orders
-        if price is not None and order_type in ("Limit", "Stop", "StopLimit"):
+        # Add price for Limit/Stop/StopLimit orders
+        if order_type in ("Limit", "StopLimit") and price is not None:
             payload["price"] = price
+        if order_type in ("Stop", "StopLimit") and stop_price is not None:
+            payload["stopPrice"] = stop_price
+        elif order_type == "Stop" and price is not None and stop_price is None:
+            # Fallback for backwards compatibility
+            payload["stopPrice"] = price
 
         logger.info(f"Placing order: {action} {qty}x {symbol} @ {'$' + str(price) if price else 'MKT'} on account {account_spec} (id={account_id})")
 
+        response = None
         try:
             response = self._proxied_request("POST", url, headers=headers, json_body=payload, timeout=30)
             response.raise_for_status()

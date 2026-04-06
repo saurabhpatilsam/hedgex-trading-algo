@@ -12,8 +12,8 @@ else:
     engine = create_engine(
         DATABASE_URL,
         pool_pre_ping=True,      # Reconnect stale connections
-        pool_size=10,             # Max persistent connections
-        max_overflow=20,          # Burst connections beyond pool_size
+        pool_size=3,              # Keep low — Supabase Session mode has hard client limit
+        max_overflow=2,           # Minimal burst — total max = pool_size + max_overflow = 5 per worker
         pool_recycle=300,         # Recycle connections every 5 minutes
     )
 
