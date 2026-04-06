@@ -1,16 +1,10 @@
-"""
-Tradovate Client mimicking TradingView integration.
-Allows login via username/password and fetching sub-accounts.
-
-When proxy_url and user_id are set, ALL outbound requests are routed
-through the Azure IP proxy VM so that Tradovate sees the user's
-dedicated static IP address.
-"""
 import os
 import requests
 import urllib.parse
 from typing import Optional, Dict, List, Any
 import logging
+import time
+from datetime import datetime, timezone
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -28,6 +22,9 @@ PROXY_URLS = {
     "india": os.getenv("PROXY_URL_INDIA", "http://20.192.16.60:9000"),
     "uk": os.getenv("PROXY_URL_UK", "http://20.50.127.77:9000"),
 }
+
+# Global Token Cache to prevent Tradovate from throwing HTTP 429 on constant polling
+_TOKEN_CACHE = {} 
 
 
 class TradovateClient:
@@ -48,7 +45,6 @@ class TradovateClient:
         try:
             from database import SessionLocal
             from models import RequestLog
-            from datetime import datetime, timezone
 
             db = SessionLocal()
             try:
@@ -166,15 +162,26 @@ class TradovateClient:
 
     def login(self, username: str, password: str) -> tuple[Optional[str], Optional[str]]:
         """
-        Authenticate with Tradovate.
+        Authenticate with Tradovate. Uses a local cache to prevent 429s.
         Returns (token, error_message).
         """
         self.username = username
+        
+        # Check global cache
+        global _TOKEN_CACHE
+        if username in _TOKEN_CACHE:
+            cached_data = _TOKEN_CACHE[username]
+            # Tradovate tokens usually expire quickly, let's refresh aggressively to be safe (if more than 5 minutes old)
+            if time.time() - cached_data.get("timestamp", 0) < 600:
+                self.access_token = cached_data["token"]
+                logger.info(f"Using cached token for {username}")
+                return self.access_token, None
+                
         payload = self._build_auth_payload(username, password)
         headers = self._build_tv_headers()
 
         try:
-            logger.info(f"Attempting login for user: {username}")
+            logger.info(f"Attempting fresh login for user: {username}")
             response = self._proxied_request("POST", AUTH_URL, headers=headers, data=payload, timeout=15)
             
             if response.status_code != 200:
@@ -188,7 +195,9 @@ class TradovateClient:
                 token = data.get("d", {}).get("access_token")
                 if token:
                     self.access_token = token
-                    logger.info(f"Login successful for {username}")
+                    # Cache the token globally
+                    _TOKEN_CACHE[username] = {"token": token, "timestamp": time.time()}
+                    logger.info(f"Login successful for {username}. Token cached.")
                     return token, None
                 else:
                     err_msg = "Login successful but no token in response"
