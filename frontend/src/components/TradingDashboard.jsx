@@ -162,7 +162,7 @@ export default function TradingDashboard() {
     }, []);
 
     // ── Instrument Cards Component ──────────────────────
-    const FALLBACK_INSTRUMENTS = ['ESH6', 'GCG6', 'MESH6', 'MGCG6', 'MNQH6', 'NQH6'];
+    const FALLBACK_INSTRUMENTS = ['ESM6', 'GCM6', 'MESM6', 'MGCM6', 'MNQM6', 'NQM6'];
 
     // Fallback: if SSE not working, poll prices every 3s via cached Redis, then direct REST
     const fallbackSymbolsRef = useRef(FALLBACK_INSTRUMENTS);

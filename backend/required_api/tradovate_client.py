@@ -171,8 +171,8 @@ class TradovateClient:
         global _TOKEN_CACHE
         if username in _TOKEN_CACHE:
             cached_data = _TOKEN_CACHE[username]
-            # Tradovate tokens usually expire quickly, let's refresh aggressively to be safe (if more than 5 minutes old)
-            if time.time() - cached_data.get("timestamp", 0) < 600:
+            # Tradovate tokens last ~2h; cache for 30min to avoid 429 rate limit
+            if time.time() - cached_data.get("timestamp", 0) < 1800:
                 self.access_token = cached_data["token"]
                 logger.info(f"Using cached token for {username}")
                 return self.access_token, None

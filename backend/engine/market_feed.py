@@ -8,6 +8,7 @@ import json
 import logging
 import time
 from typing import Dict, Set
+from collections import defaultdict
 
 from redis import Redis
 
@@ -35,6 +36,9 @@ class MarketFeedManager:
         self.ws = None
         self._running = False
         self._redis: Redis = None
+        self._tick_count: int = 0
+        self._last_summary: float = 0
+        self._tick_counts_by_sym: Dict[str, int] = defaultdict(int)
         self._initialized = True
 
     async def start(self):
@@ -59,39 +63,63 @@ class MarketFeedManager:
         asyncio.create_task(self._pump_loop())
 
     async def _pump_loop(self):
-        """Main loop: connect, authorize, subscribe, read frames."""
-        # This will use the generic TradovateClient and its cached token
-        db = SessionLocal()
-        cred = db.query(BrokerCredential).filter(BrokerCredential.is_active == True).first()
-        db.close()
+        """Main loop with auto-reconnect: connect, authorize, subscribe, read frames."""
+        retry_delay = 5
+        max_delay = 60
 
-        if not cred:
-            logger.warning("[MarketFeed] No active credentials found to start Market Feed.")
-            self._running = False
-            return
-            
-        self.client = TradovateClient()
-        # Ensure we have a valid token (cached or fresh)
-        token, err = self.client.login(cred.login_id, cred.password)
-        if not token:
-            logger.error(f"[MarketFeed] Failed to authenticate: {err}")
-            self._running = False
-            return
+        while self._running:
+            db = SessionLocal()
+            cred = db.query(BrokerCredential).filter(BrokerCredential.is_active == True).first()
+            db.close()
 
-        import websocket
-        
-        logger.info("[MarketFeed] Spawning background thread for WebSocket Pump...")
-        # Since websocket-client is blocking, we wrap it in a thread executor
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._sync_ws_pump, token)
-        
+            if not cred:
+                logger.warning("[MarketFeed] No active credentials found. Retrying in 30s...")
+                await asyncio.sleep(30)
+                continue
+
+            self.client = TradovateClient()
+            token, err = self.client.login(cred.login_id, cred.password)
+            if not token:
+                logger.error(f"[MarketFeed] Failed to authenticate: {err}. Retrying in {retry_delay}s...")
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, max_delay)
+                continue
+
+            logger.info("[MarketFeed] Spawning background thread for WebSocket Pump...")
+            loop = asyncio.get_event_loop()
+            try:
+                await loop.run_in_executor(None, self._sync_ws_pump, token)
+            except Exception as e:
+                logger.error(f"[MarketFeed] Pump thread error: {e}")
+
+            if not self._running:
+                break
+            logger.warning(f"[MarketFeed] WebSocket disconnected. Reconnecting in {retry_delay}s...")
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, max_delay)
+
         self._running = False
 
     def _sync_ws_pump(self, token: str):
         """Synchronous blocking pump using websocket-client."""
         import websocket
         from datetime import datetime, timezone
+        import requests
         
+        # Build Reverse ID Map for Trade entries
+        self.contract_map = {}
+        for sym in self.active_symbols:
+            try:
+                url = f"https://demo.tradovateapi.com/v1/contract/find?name={sym}"
+                res = requests.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+                if res.status_code == 200:
+                    c_id = res.json().get("id")
+                    if c_id:
+                        self.contract_map[c_id] = sym
+                        logger.info(f"[MarketFeed] Mapped {sym} to {c_id}")
+            except Exception as e:
+                logger.error(f"[MarketFeed] Map Error for {sym}: {e}")
+
         ws_url = "wss://md.tradovateapi.com/v1/websocket"
         logger.info(f"[MarketFeed] Connecting to MD WebSocket: {ws_url}")
         
@@ -102,7 +130,7 @@ class MarketFeedManager:
             return
             
         # 1. Authorize MD
-        auth_msg = f"authorize\n{token}"
+        auth_msg = f"authorize\n1\n\n{token}"
         ws.send(auth_msg)
         try:
             # Drop initial frames until 'a[{"s":200,"i":0...}]'
@@ -118,10 +146,10 @@ class MarketFeedManager:
         logger.info("[MarketFeed] MD Authorized successfully.")
         
         # 2. Subscribe to standard Market Data for all tracked symbols
-        sub_id = 1
+        sub_id = 2
         for sym in self.active_symbols:
             logger.info(f"[MarketFeed] Subscribing to: {sym}")
-            req = f'md/subscribeQuote\n{sub_id}\n{{"symbol":"{sym}"}}'
+            req = f'md/subscribeQuote\n{sub_id}\n\n{{"symbol":"{sym}"}}'
             ws.send(req)
             sub_id += 1
             
@@ -133,7 +161,11 @@ class MarketFeedManager:
             while self._running:
                 # Send manual heartbeat according to Tradovate Socket.IO spec
                 if time.time() - last_heartbeat > 2.5:
-                    ws.send("[]")
+                    try:
+                        ws.send("[]")
+                    except Exception:
+                        logger.warning("[MarketFeed] Heartbeat send failed, reconnecting...")
+                        break
                     last_heartbeat = time.time()
                 
                 try:
@@ -145,7 +177,10 @@ class MarketFeedManager:
                     break
                     
                 if frame == "h":
-                    ws.send("[]")
+                    try:
+                        ws.send("[]")
+                    except Exception:
+                        break
                     last_heartbeat = time.time()
                     continue
                     
@@ -157,38 +192,65 @@ class MarketFeedManager:
                                 data = msg["d"]
                                 if "quotes" in data:
                                     for quote in data["quotes"]:
-                                        self._process_quote(quote)
+                                        c_id = quote.get("contractId")
+                                        sym = self.contract_map.get(c_id, "UNKNOWN")
+                                        if sym == "UNKNOWN":
+                                            continue
+                                        self._process_quote(quote, sym)
                     except Exception as e:
                         logger.error(f"[MarketFeed] JSON Parse Error on frame: {e}")
         finally:
             logger.info("[MarketFeed] Closing WebSocket.")
             ws.close()
             
-    def _process_quote(self, quote: dict):
-        """Extract Trade updates and stream them to Redis."""
+    def _process_quote(self, quote: dict, sym: str):
+        """Extract Trade/Bid/Ask updates and stream to Redis (hash + pubsub + list)."""
         try:
             entries = quote.get("entries", {})
-            sym = quote.get("contractName", "UNKNOWN")
             
-            # Map standard quotes (Trade=Trade, Bid/Offer can also be captured if needed)
-            if "Trade" in entries:
-                trade = entries["Trade"]
-                price = trade.get("price")
-                if price is not None:
-                    # Construct uniform tick response
-                    tick = {
-                        "date": time.time(),
-                        "price": float(price),
-                        "volume": int(trade.get("size", 0)),
-                        "bid": float(entries.get("Bid", {}).get("price", 0)),
-                        "ask": float(entries.get("Offer", {}).get("price", 0))
-                    }
-                    
-                    redis_key = f"hx:market:ticker:{sym}"
-                    self._redis.lpush(redis_key, json.dumps(tick))
-                    self._redis.ltrim(redis_key, 0, 99)
-                    # Mark active state
-                    self._redis.set("hx:md:status", json.dumps({"state": "active", "timestamp": time.time()}))
+            # Build tick from any available data (Trade, Bid, Offer)
+            trade = entries.get("Trade", {})
+            bid_entry = entries.get("Bid", {})
+            ask_entry = entries.get("Offer", {})
+            
+            price = trade.get("price") or bid_entry.get("price") or ask_entry.get("price")
+            if price is None:
+                return
+            
+            tick = {
+                "date": time.time(),
+                "price": float(price),
+                "volume": int(trade.get("size", 0)),
+                "bid": float(bid_entry.get("price", 0)),
+                "ask": float(ask_entry.get("price", 0)),
+                "symbol": sym
+            }
+            tick_json = json.dumps(tick)
+            
+            # 1. Update the prices HASH (read by GET /api/market/prices)
+            self._redis.hset("hx:prices", sym, tick_json)
+            
+            # 2. PUBLISH to the ticks channel (read by SSE /api/market/stream)
+            self._redis.publish("hx:ticks", tick_json)
+            
+            # 3. Also keep the per-symbol list for tick history
+            redis_key = f"hx:market:ticker:{sym}"
+            self._redis.lpush(redis_key, tick_json)
+            self._redis.ltrim(redis_key, 0, 99)
+            
+            # 4. Mark active state
+            self._redis.set("hx:md:status", json.dumps({"state": "active", "timestamp": time.time()}))
+            
+            # 5. Periodic summary logging (every 30s instead of per-tick)
+            self._tick_count += 1
+            self._tick_counts_by_sym[sym] += 1
+            now = time.time()
+            if now - self._last_summary > 30:
+                summary = ", ".join(f"{s}:{c}" for s, c in sorted(self._tick_counts_by_sym.items()))
+                logger.info(f"[MarketFeed] 30s summary: {self._tick_count} total ticks | {summary}")
+                self._tick_count = 0
+                self._tick_counts_by_sym.clear()
+                self._last_summary = now
                     
         except Exception as e:
             logger.error(f"[MarketFeed] Error processing quote: {e}")
