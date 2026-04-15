@@ -196,29 +196,40 @@ export default function TradingDashboard() {
     }, [sseConnected]);
 
     const InstrumentCards = () => {
-        // Normalizes to remove whitespace/hyphens for accurate deduplication
+        // Normalizes to remove whitespace/hyphens
         const standardize = s => typeof s === 'string' ? s.replace(/[\s-]/g, '').toUpperCase() : '';
+        // Heuristic to get the underlying instrument prefix (e.g. "MNQM6" -> "MNQ")
+        const getPrefix = s => s.replace(/[A-Z]\d{1,2}$/i, '');
+        
         const mdSymbols = mdStatus?.symbols || [];
         const priceSymbols = Object.keys(livePrices);
         
-        const preferredSymbols = {};
+        const finalSymbols = [];
+        const prefixMap = {};
         
-        // Pri 1: Symbols that currently have live ticks
-        priceSymbols.forEach(s => preferredSymbols[standardize(s)] = s);
+        // Pri 1: Symbols that currently have live ticks get highest priority
+        priceSymbols.forEach(s => {
+            const std = standardize(s);
+            const pfx = getPrefix(std);
+            if (!prefixMap[pfx]) {
+                prefixMap[pfx] = s;
+                finalSymbols.push(s);
+            }
+        });
         
-        // Pri 2: Symbols recognized by the Market Data service
+        // Pri 2: Add MD tracked symbols only if we don't already have that prefix living
+        // This naturally removes stale 'H6' / 'G6' offline contracts if the 'M6' variant is already added
         mdSymbols.forEach(s => { 
-            const std = standardize(s); 
-            if (!preferredSymbols[std]) preferredSymbols[std] = s; 
+            const std = standardize(s);
+            const pfx = getPrefix(std);
+            if (!prefixMap[pfx]) {
+                prefixMap[pfx] = s;
+                finalSymbols.push(s);
+            }
         });
         
         // If no data is available from the network, fallback to default symbols
-        let allSymbols = [];
-        if (Object.keys(preferredSymbols).length > 0) {
-            allSymbols = Object.values(preferredSymbols).sort();
-        } else {
-            allSymbols = [...FALLBACK_INSTRUMENTS].sort();
-        }
+        let allSymbols = finalSymbols.length > 0 ? finalSymbols.sort() : [...FALLBACK_INSTRUMENTS].sort();
 
         return (
             <div style={{
