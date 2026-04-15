@@ -42,3 +42,4 @@ npm-debug.log*
 Thumbs.db
 *.pem
 update_env.py
+*.rdb
