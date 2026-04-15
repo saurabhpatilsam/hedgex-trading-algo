@@ -31,9 +31,7 @@ from models import Instrument, BrokerCredential, User
 from required_api.tradovate_client import get_proxied_client
 
 # ── Config ────────────────────────────────────────────────
-REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
-REDIS_DB = int(os.environ.get("REDIS_DB", 0))
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 WS_URL = "wss://md.tradovateapi.com/v1/websocket"
 HEARTBEAT_INTERVAL = 30  # seconds
 RECONNECT_DELAY = 5      # seconds
@@ -49,8 +47,7 @@ logger = logging.getLogger("hedgex-md")
 
 class MarketDataService:
     def __init__(self):
-        self.redis = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB,
-                                 decode_responses=True)
+        self.redis = redis.from_url(REDIS_URL, decode_responses=True)
         self.access_token = None
         self.ws = None
         self.symbols = []

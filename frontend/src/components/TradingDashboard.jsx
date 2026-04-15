@@ -196,11 +196,29 @@ export default function TradingDashboard() {
     }, [sseConnected]);
 
     const InstrumentCards = () => {
-        // Get all instruments from MD status, livePrices, or fallback
+        // Normalizes to remove whitespace/hyphens for accurate deduplication
+        const standardize = s => typeof s === 'string' ? s.replace(/[\s-]/g, '').toUpperCase() : '';
         const mdSymbols = mdStatus?.symbols || [];
         const priceSymbols = Object.keys(livePrices);
-        const combined = [...new Set([...mdSymbols, ...priceSymbols])];
-        const allSymbols = (combined.length > 0 ? combined : FALLBACK_INSTRUMENTS).sort();
+        
+        const preferredSymbols = {};
+        
+        // Pri 1: Symbols that currently have live ticks
+        priceSymbols.forEach(s => preferredSymbols[standardize(s)] = s);
+        
+        // Pri 2: Symbols recognized by the Market Data service
+        mdSymbols.forEach(s => { 
+            const std = standardize(s); 
+            if (!preferredSymbols[std]) preferredSymbols[std] = s; 
+        });
+        
+        // If no data is available from the network, fallback to default symbols
+        let allSymbols = [];
+        if (Object.keys(preferredSymbols).length > 0) {
+            allSymbols = Object.values(preferredSymbols).sort();
+        } else {
+            allSymbols = [...FALLBACK_INSTRUMENTS].sort();
+        }
 
         return (
             <div style={{

@@ -16,6 +16,7 @@ def _get_redis():
     global _redis_instance
     if _redis_instance is None:
         from redis import Redis
+        # Default to localhost if REDIS_URL not in environment
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
         _redis_instance = Redis.from_url(redis_url, decode_responses=True)
     return _redis_instance

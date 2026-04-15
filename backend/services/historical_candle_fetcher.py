@@ -48,9 +48,7 @@ logging.basicConfig(
 log = logging.getLogger("candle-fetcher")
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-REDIS_HOST     = os.environ.get('REDIS_HOST',     'redismanager.redis.cache.windows.net')
-REDIS_PORT     = int(os.environ.get('REDIS_PORT', '6380'))
-REDIS_PASSWORD = os.environ.get('REDIS_PASSWORD', '')
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
 SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://supabase.magicreview.ai')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', (
@@ -90,13 +88,8 @@ def get_token_from_redis() -> Optional[str]:
     """Retrieve active Tradovate API token from Azure Redis cache."""
     try:
         import redis as redis_lib
-        log.info(f"🔴 Connecting to Redis at {REDIS_HOST}:{REDIS_PORT}...")
-        r = redis_lib.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            password=REDIS_PASSWORD,
-            ssl=True,
-            ssl_cert_reqs=None,
+        r = redis_lib.from_url(
+            REDIS_URL,
             decode_responses=True,
             socket_timeout=10,
             socket_connect_timeout=10,
@@ -127,12 +120,8 @@ def store_token_to_redis(access_token: str) -> None:
     """Store renewed token back to all account keys in Redis."""
     try:
         import redis as redis_lib
-        r = redis_lib.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            password=REDIS_PASSWORD,
-            ssl=True,
-            ssl_cert_reqs=None,
+        r = redis_lib.from_url(
+            REDIS_URL,
             decode_responses=True,
             socket_timeout=10,
         )

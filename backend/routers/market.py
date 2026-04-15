@@ -29,11 +29,12 @@ _executor = ThreadPoolExecutor(max_workers=2)
 def get_redis():
     global _redis
     if _redis is None:
-        _redis = redis.Redis(
-            host="localhost", port=6379, db=0,
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+        _redis = redis.from_url(
+            redis_url,
             decode_responses=True,
             socket_timeout=3,
-            socket_connect_timeout=3,
+            socket_connect_timeout=3
         )
     return _redis
 
