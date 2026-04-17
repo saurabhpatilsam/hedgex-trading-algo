@@ -43,3 +43,5 @@ Thumbs.db
 *.pem
 update_env.py
 *.rdb
+backend/venv_test/
+node_modules/
