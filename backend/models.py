@@ -109,6 +109,7 @@ class Account(Base):
     credential_id = Column(Integer, ForeignKey("broker_credentials.id", ondelete="CASCADE"), nullable=False)
     account_number = Column(String, default="")
     tradovate_account_id = Column(Integer, nullable=True)
+    tv_account_id = Column(String, nullable=True)
     balance = Column(Float, default=0.0)
     peak_balance = Column(Float, nullable=True)      # Highest balance ever seen (our watermark)
     trailing_drawdown = Column(Float, nullable=True)  # Broker's trailing DD width (e.g. $2500)

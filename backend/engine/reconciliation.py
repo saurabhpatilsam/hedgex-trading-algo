@@ -45,12 +45,14 @@ class ReconciliationEngine:
         # Map broker positions by contract
         broker_map = {}
         for bp in broker_positions:
-            contract_id = bp.get("contractId")
-            net_pos = bp.get("netPos", 0)
+            contract_id = bp.get("instrument") or bp.get("contractId") or bp.get("id")
+            qty = bp.get("qty") or abs(bp.get("netPos", 0) or 0)
+            side = str(bp.get("side") or "").lower()
+            net_pos = qty if side in ("buy", "long") else -qty
             broker_map[contract_id] = {
                 "contract_id": contract_id,
                 "net_position": net_pos,
-                "avg_price": bp.get("netPrice", 0),
+                "avg_price": bp.get("avgPrice") or bp.get("netPrice", 0),
             }
 
         for ip in internal_for_account:

@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.worktrees/
 __pycache__/
 *.pyc
 .venv/
@@ -22,6 +23,7 @@ env/
 # Build output
 dist/
 build/
+graphify-out/
 *.egg-info/
 
 # Environment variables

@@ -357,8 +357,7 @@ def activate_kill_switch(payload: KillSwitchRequest, db: Session = Depends(get_d
     """
     from engine.risk_manager import RiskManager
     from engine.alerting import create_alert
-    from models import BrokerCredential, User
-    from required_api.tradovate_client import get_proxied_client
+    from services.tv_bridge_service import flatten_accounts
     from sqlalchemy.orm import joinedload
 
     risk = RiskManager(db)
@@ -371,40 +370,15 @@ def activate_kill_switch(payload: KillSwitchRequest, db: Session = Depends(get_d
     accounts = (
         db.query(Account)
         .options(joinedload(Account.credential))
-        .filter(Account.is_active == True, Account.tradovate_account_id.isnot(None))
+        .filter(Account.is_active == True)
         .all()
     )
 
-    for account in accounts:
-        cred = account.credential
-        if not cred or not cred.is_active:
-            continue
-
-        try:
-            # Get the user for proxy routing
-            user = db.query(User).filter(User.id == cred.user_id).first()
-            client = get_proxied_client(user=user)
-            token, error = client.login(cred.login_id, cred.password)
-            if not token:
-                flatten_reports.append({
-                    "account": account.name,
-                    "error": f"Login failed: {error}",
-                })
-                continue
-
-            report = client.flatten_account(
-                account_id=account.tradovate_account_id,
-                account_spec=account.name,
-            )
-            flatten_reports.append(report)
-            logger.info(f"Flattened account {account.name}: {report}")
-
-        except Exception as e:
-            flatten_reports.append({
-                "account": account.name,
-                "error": str(e),
-            })
-            logger.error(f"Failed to flatten {account.name}: {e}")
+    try:
+        flatten_reports = flatten_accounts(db, accounts)
+    except Exception as e:
+        flatten_reports.append({"account": "ALL", "error": str(e)})
+        logger.error(f"Failed to flatten accounts: {e}")
 
     # Create alert with full report
     total_cancelled = sum(len(r.get("orders_cancelled", [])) for r in flatten_reports)

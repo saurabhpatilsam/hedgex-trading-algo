@@ -241,3 +241,55 @@ export const panelApi = {
             body: JSON.stringify({ account_id: accountId, symbol }),
         }),
 };
+
+// ── Broker Data (TV Bridge API) ────────────────────────────
+export const brokerApi = {
+    // Config
+    config: () => request("/broker/config"),
+
+    // Accounts
+    accounts: () => request("/broker/accounts"),
+    accountState: (id) => request(`/broker/accounts/${id}/state`),
+
+    // Per-account data
+    orders: (accountId) => request(`/broker/accounts/${accountId}/orders`),
+    positions: (accountId) => request(`/broker/accounts/${accountId}/positions`),
+    instruments: (accountId) => request(`/broker/accounts/${accountId}/instruments`),
+    executions: (accountId, symbol = null) => {
+        let url = `/broker/accounts/${accountId}/executions`;
+        if (symbol) url += `?symbol=${encodeURIComponent(symbol)}`;
+        return request(url);
+    },
+
+    // Quotes
+    quotes: (symbols, accountId) =>
+        request(`/broker/quotes?symbols=${encodeURIComponent(symbols)}&account_id=${accountId}`),
+
+    // Aggregated data (all accounts)
+    allPositions: () => request("/broker/all-positions"),
+    allOrders: () => request("/broker/all-orders"),
+    allStates: () => request("/broker/all-states"),
+
+    // Order actions
+    placeOrder: (accountId, data) =>
+        request(`/broker/accounts/${accountId}/orders`, {
+            method: "POST",
+            body: JSON.stringify(data),
+        }),
+    modifyOrder: (accountId, orderId, data) =>
+        request(`/broker/accounts/${accountId}/orders/${orderId}`, {
+            method: "PUT",
+            body: JSON.stringify(data),
+        }),
+    cancelOrder: (accountId, orderId) =>
+        request(`/broker/accounts/${accountId}/orders/${orderId}`, {
+            method: "DELETE",
+        }),
+
+    // Position actions
+    closePosition: (accountId, positionId) =>
+        request(`/broker/accounts/${accountId}/positions/${positionId}`, {
+            method: "DELETE",
+        }),
+};
+

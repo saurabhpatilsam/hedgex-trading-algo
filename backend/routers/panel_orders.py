@@ -45,10 +45,13 @@ class PanelOrderRequest(BaseModel):
     order_type: str = "Market"  # Market, Limit, Stop, StopLimit
     price: Optional[float] = None       # Limit price
     stop_price: Optional[float] = None  # Stop trigger price
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    duration_type: str = "Day"
 
 
 class CancelOrderRequest(BaseModel):
-    broker_order_id: int
+    broker_order_id: str
     account_id: int
 
 
@@ -74,11 +77,11 @@ def place_panel_order(
     Flow:
       1. Resolve group → memberships → accounts
       2. Resolve instrument symbol → contract_month (Tradovate symbol)
-      3. For each account: login → place_order
+      3. For each account: place TV Bridge order using Redis token and quote
       4. Record results in OrderRecord table
       5. Return aggregated report
     """
-    from required_api.tradovate_client import get_proxied_client
+    from services.tv_bridge_service import RedisQuoteMissing, TVBridgeValidationError, place_order_for_accounts
     from engine.alerting import create_alert
 
     # ── Validate: exactly one of group_id or account_ids ──
@@ -164,107 +167,54 @@ def place_panel_order(
     if payload.quantity < 1:
         raise HTTPException(status_code=400, detail="Quantity must be at least 1")
 
-    # ── Fan-out: place order on each account ─────────────
-    results: List[dict] = []
-    success_count = 0
-    fail_count = 0
+    try:
+        bridge_report = place_order_for_accounts(
+            db,
+            accounts=target_accounts,
+            instrument=instrument,
+            side=payload.action,
+            qty=payload.quantity,
+            order_type=payload.order_type,
+            limit_price=payload.price,
+            stop_price=payload.stop_price,
+            stop_loss=payload.stop_loss,
+            take_profit=payload.take_profit,
+            duration_type=payload.duration_type,
+        )
+    except RedisQuoteMissing as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except TVBridgeValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    results: List[dict] = bridge_report["results"]
+    success_count = bridge_report["success_count"]
+    fail_count = bridge_report["fail_count"]
 
-    # Cache logins per credential to avoid re-authenticating
-    client_cache = {}
-
-    for account in target_accounts:
-        cred = account.credential
-        if not cred or not cred.is_active:
-            results.append({
-                "account_id": account.id,
-                "account_name": account.name,
-                "success": False,
-                "error": "No active credential",
-            })
-            fail_count += 1
+    order_records_by_account = {}
+    for result in results:
+        if not result.get("success"):
             continue
+        order_record = OrderRecord(
+            strategy_id=None,
+            account_id=result["account_id"],
+            instrument_id=instrument.id,
+            side=payload.action,
+            quantity=payload.quantity,
+            filled_quantity=0,
+            order_type=payload.order_type,
+            price=payload.price,
+            state=(result.get("result", {}).get("status") or "ACCEPTED").upper(),
+            broker_order_id=result.get("broker_order_id"),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(order_record)
+        order_records_by_account[result["account_id"]] = order_record
 
-        # Get or create client for this credential
-        cred_key = cred.id
-        if cred_key not in client_cache:
-            try:
-                user = db.query(User).filter(User.id == cred.user_id).first()
-                client = get_proxied_client(user=user)
-                token, error = client.login(cred.login_id, cred.password)
-                if not token:
-                    # All accounts under this credential will fail
-                    client_cache[cred_key] = {"client": None, "error": f"Login failed: {error}"}
-                else:
-                    client_cache[cred_key] = {"client": client, "error": None}
-            except Exception as e:
-                client_cache[cred_key] = {"client": None, "error": str(e)}
-
-        cached = client_cache[cred_key]
-        if not cached["client"]:
-            results.append({
-                "account_id": account.id,
-                "account_name": account.name,
-                "success": False,
-                "error": cached["error"],
-            })
-            fail_count += 1
-            continue
-
-        client = cached["client"]
-
-        try:
-            result = client.place_order(
-                account_id=account.tradovate_account_id,
-                account_spec=account.name,
-                symbol=tradovate_symbol,
-                action=payload.action,
-                qty=payload.quantity,
-                order_type=payload.order_type,
-                price=payload.price,
-                stop_price=payload.stop_price,
-            )
-
-            # Extract broker order ID from response
-            broker_oid = str(result.get("orderId", result.get("id", "")))
-
-            # Record in OrderRecord
-            order_record = OrderRecord(
-                strategy_id=None,  # Panel orders have no strategy
-                account_id=account.id,
-                instrument_id=instrument.id,
-                side=payload.action,
-                quantity=payload.quantity,
-                filled_quantity=0,
-                order_type=payload.order_type,
-                price=payload.price,
-                state="ACCEPTED",
-                broker_order_id=broker_oid,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
-            )
-            db.add(order_record)
-
-            results.append({
-                "account_id": account.id,
-                "account_name": account.name,
-                "success": True,
-                "broker_order_id": broker_oid,
-                "order_record_id": None,  # Will be set after flush
-            })
-            success_count += 1
-
-        except Exception as e:
-            logger.error(f"Order failed for {account.name}: {e}")
-            results.append({
-                "account_id": account.id,
-                "account_name": account.name,
-                "success": False,
-                "error": str(e),
-            })
-            fail_count += 1
-
-    # Commit all order records
     db.flush()
+    for result in results:
+        order_record = order_records_by_account.get(result.get("account_id"))
+        if order_record:
+            result["order_record_id"] = order_record.id
 
     # Create audit log
     group_name = group.name if group else f"Accounts {payload.account_ids}"
@@ -282,6 +232,9 @@ def place_panel_order(
             "order_type": payload.order_type,
             "price": payload.price,
             "stop_price": payload.stop_price,
+            "stop_loss": payload.stop_loss,
+            "take_profit": payload.take_profit,
+            "duration_type": payload.duration_type,
             "success_count": success_count,
             "fail_count": fail_count,
         }),
@@ -312,6 +265,9 @@ def place_panel_order(
         "quantity": payload.quantity,
         "order_type": payload.order_type,
         "price": payload.price,
+        "stop_loss": payload.stop_loss,
+        "take_profit": payload.take_profit,
+        "duration_type": payload.duration_type,
         "success_count": success_count,
         "fail_count": fail_count,
         "total_accounts": success_count + fail_count,
@@ -372,28 +328,18 @@ def cancel_panel_order(
     db: Session = Depends(get_db),
 ):
     """Cancel a specific broker order."""
-    from required_api.tradovate_client import get_proxied_client
+    from services.tv_bridge_service import cancel_order
 
     account = (
         db.query(Account)
-        .options(joinedload(Account.credential))
         .filter(Account.id == payload.account_id)
         .first()
     )
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    if not account.credential:
-        raise HTTPException(status_code=400, detail="Account has no credential")
-
-    cred = account.credential
-    user = db.query(User).filter(User.id == cred.user_id).first()
-    client = get_proxied_client(user=user)
-    token, error = client.login(cred.login_id, cred.password)
-    if not token:
-        raise HTTPException(status_code=400, detail=f"Login failed: {error}")
 
     try:
-        result = client.cancel_order(payload.broker_order_id)
+        result = cancel_order(db, account, payload.broker_order_id)
 
         # Update local record
         local_order = (
@@ -423,49 +369,35 @@ class FlattenRequest(BaseModel):
 @router.get("/positions")
 def list_open_positions(db: Session = Depends(get_db)):
     """
-    Fetch open positions from Tradovate for all active accounts.
+    Fetch open positions from TV Bridge for all active accounts.
     Returns aggregated position data across accounts.
     """
-    from required_api.tradovate_client import get_proxied_client
+    from services.tv_bridge_service import list_positions_for_accounts
 
     accounts = (
         db.query(Account)
-        .options(joinedload(Account.credential))
         .filter(Account.is_active == True)
         .all()
     )
 
     all_positions = []
-    for account in accounts:
-        if not account.credential:
+    for pos in list_positions_for_accounts(db, accounts):
+        qty = abs(pos.get("qty") or 0)
+        if qty == 0:
             continue
-
-        try:
-            user = db.query(User).filter(User.id == account.credential.user_id).first()
-            client = get_proxied_client(user=user)
-            token, err = client.login(account.credential.login_id, account.credential.password)
-            if not token:
-                continue
-
-            positions = client.get_positions(int(account.broker_account_id))
-            for pos in positions:
-                net_pos = pos.get("netPos", 0)
-                if net_pos == 0:
-                    continue
-
-                all_positions.append({
-                    "account_id": account.id,
-                    "account_name": account.name,
-                    "broker_account_id": account.broker_account_id,
-                    "contract_id": pos.get("contractId"),
-                    "net_pos": net_pos,
-                    "net_price": pos.get("netPrice"),
-                    "side": "Long" if net_pos > 0 else "Short",
-                    "quantity": abs(net_pos),
-                    "timestamp": pos.get("timestamp"),
-                })
-        except Exception as e:
-            logger.error(f"Error fetching positions for {account.name}: {e}")
+        side = str(pos.get("side") or "").lower()
+        all_positions.append({
+            **pos,
+            "account_id": pos.get("_local_account_id"),
+            "account_name": pos.get("_account_name"),
+            "broker_account_id": pos.get("_account_id"),
+            "contract_id": pos.get("id"),
+            "net_pos": qty if side in ("buy", "long") else -qty,
+            "net_price": pos.get("avgPrice"),
+            "side": "Long" if side in ("buy", "long") else "Short",
+            "quantity": qty,
+            "timestamp": pos.get("lastModified"),
+        })
 
     return {"positions": all_positions, "count": len(all_positions)}
 
@@ -479,31 +411,18 @@ def flatten_position(
     db: Session = Depends(get_db),
 ):
     """Flatten (close all positions and cancel orders) for a specific account."""
-    from required_api.tradovate_client import get_proxied_client
+    from services.tv_bridge_service import flatten_account
 
     account = (
         db.query(Account)
-        .options(joinedload(Account.credential))
         .filter(Account.id == payload.account_id)
         .first()
     )
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    if not account.credential:
-        raise HTTPException(status_code=400, detail="Account has no credential")
-
-    cred = account.credential
-    user = db.query(User).filter(User.id == cred.user_id).first()
-    client = get_proxied_client(user=user)
-    token, err = client.login(cred.login_id, cred.password)
-    if not token:
-        raise HTTPException(status_code=400, detail=f"Login failed: {err}")
 
     try:
-        report = client.flatten_account(
-            account_id=int(account.broker_account_id),
-            account_spec=account.broker_account_name or account.name,
-        )
+        report = flatten_account(db, account, symbol=payload.symbol)
 
         # Create audit record
         audit = AuditLog(
@@ -522,4 +441,3 @@ def flatten_position(
         return {"success": True, "report": report}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Flatten failed: {str(e)}")
-

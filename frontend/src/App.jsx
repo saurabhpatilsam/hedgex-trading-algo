@@ -3,6 +3,7 @@ import AccountManager from "./components/AccountManager";
 import GroupManager from "./components/GroupManager";
 import StrategyPanel from "./components/StrategyPanel";
 import TradingDashboard from "./components/TradingDashboard";
+import PositionsPanel from "./components/PositionsPanel";
 import NetworkLogs from "./components/NetworkLogs";
 import "./App.css";
 
@@ -72,6 +73,7 @@ class ErrorBoundary extends Component {
 
 const TABS = [
   { id: "trading", label: "Trading", icon: "🎯" },
+  { id: "positions", label: "Positions & Orders", icon: "📊" },
   { id: "accounts", label: "Accounts", icon: "👥" },
   { id: "groups", label: "Groups", icon: "🔗" },
   { id: "strategy", label: "Strategy Control", icon: "⚡" },
@@ -113,6 +115,7 @@ function App() {
         {/* Main Content */}
         <main className="main-content">
           {activeTab === "trading" && <TradingDashboard />}
+          {activeTab === "positions" && <PositionsPanel />}
           {activeTab === "accounts" && <AccountManager />}
           {activeTab === "groups" && <GroupManager />}
           {activeTab === "strategy" && <StrategyPanel />}

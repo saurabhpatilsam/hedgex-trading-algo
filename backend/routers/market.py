@@ -10,6 +10,7 @@ Endpoints:
 import asyncio
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
@@ -175,68 +176,25 @@ async def get_md_status():
         return {"state": "error", "error": str(e)}
 
 
-# ── Live Quote Fallback (direct from Tradovate) ──────────
+# ── Live Quote (Redis only) ──────────────────────────────
 
 
 @router.get("/live-quote")
 def get_live_quote(symbol: str = Query(..., description="Contract symbol e.g. NQM6")):
     """
-    Fetch live quote for a symbol.
-
-    Priority:
-      1. Redis hx:prices hash (fed by MarketFeedManager WebSocket — zero logins needed)
-      2. Direct Tradovate API (fallback — shares Redis-backed token cache)
+    Fetch live quote for a symbol from Redis.
     """
-    # 1. Try Redis first (no login needed, shared across all callers)
     try:
-        r = get_redis()
-        cached = r.hget("hx:prices", symbol)
-        if cached:
-            tick = json.loads(cached)
-            return {
-                "symbol": symbol,
-                "price": tick.get("price"),
-                "bid": tick.get("bid"),
-                "ask": tick.get("ask"),
-                "change": 0,
-                "source": "redis",
-            }
-    except Exception:
-        pass
-
-    # 2. Fallback: direct Tradovate API (uses Redis-cached token to avoid 429)
-    from database import SessionLocal
-    from models import BrokerCredential
-    from required_api.tradovate_client import TradovateClient
-
-    db = SessionLocal()
-    try:
-        cred = db.query(BrokerCredential).filter(
-            BrokerCredential.is_active == True
-        ).first()
-
-        if not cred:
-            return {"symbol": symbol, "error": "No active credentials", "price": None}
-
-        client = TradovateClient()
-        token, err = client.login(cred.login_id, cred.password)
-
-        if not token:
-            return {"symbol": symbol, "error": f"Login failed: {err}", "price": None}
-
-        quote = client.get_last_price(symbol)
+        from services.tv_bridge_service import get_redis_quote
+        quote = get_redis_quote(symbol, redis_client=get_redis())
         return {
             "symbol": symbol,
-            "price": quote.get("last_price"),
+            "price": quote.get("price"),
             "bid": quote.get("bid"),
             "ask": quote.get("ask"),
             "change": 0,
-            "source": "tradovate_direct",
+            "source": "redis",
         }
     except Exception as e:
-        logger.error(f"Live quote error for {symbol}: {e}")
         return {"symbol": symbol, "error": str(e), "price": None}
-    finally:
-        db.close()
-
 

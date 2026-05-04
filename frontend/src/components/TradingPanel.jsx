@@ -26,6 +26,9 @@ export default function TradingPanel({ livePrices = {} }) {
     const [quantity, setQuantity] = useState(1);
     const [price, setPrice] = useState("");
     const [stopPrice, setStopPrice] = useState("");
+    const [stopLoss, setStopLoss] = useState("");
+    const [takeProfit, setTakeProfit] = useState("");
+    const [durationType, setDurationType] = useState("Day");
 
     // ── UI State ────────────────────────────────────────
     const [recentOrders, setRecentOrders] = useState([]);
@@ -204,6 +207,7 @@ export default function TradingPanel({ livePrices = {} }) {
                 action: orderSide,
                 quantity: quantity,
                 order_type: orderType,
+                duration_type: durationType,
             };
 
             if (tradingMode === "group") {
@@ -217,6 +221,12 @@ export default function TradingPanel({ livePrices = {} }) {
             }
             if ((orderType === "Stop" || orderType === "StopLimit") && stopPrice) {
                 payload.stop_price = parseFloat(stopPrice);
+            }
+            if (stopLoss) {
+                payload.stop_loss = parseFloat(stopLoss);
+            }
+            if (takeProfit) {
+                payload.take_profit = parseFloat(takeProfit);
             }
 
             const result = await panelApi.placeOrder(payload);
@@ -233,7 +243,7 @@ export default function TradingPanel({ livePrices = {} }) {
 
     const cancelOrder = async (brokerOrderId, accountId) => {
         try {
-            await panelApi.cancelOrder(parseInt(brokerOrderId), accountId);
+            await panelApi.cancelOrder(String(brokerOrderId), accountId);
             loadRecentOrders();
         } catch (err) {
             setError(err.message || "Cancel failed");
@@ -326,6 +336,8 @@ export default function TradingPanel({ livePrices = {} }) {
                                     setSelectedInstrument(inst || null);
                                     setPrice("");
                                     setStopPrice("");
+                                    setStopLoss("");
+                                    setTakeProfit("");
                                 }}
                             >
                                 <option value="">Select Instrument</option>
@@ -421,6 +433,48 @@ export default function TradingPanel({ livePrices = {} }) {
                                 </div>
                             </div>
                         )}
+                    </div>
+
+                    <div className="tp-inputs-row tp-bracket-row">
+                        <div className="tp-price-section">
+                            <label>DURATION</label>
+                            <select
+                                className="tp-duration-select"
+                                value={durationType}
+                                onChange={(e) => setDurationType(e.target.value)}
+                            >
+                                <option value="Day">DAY</option>
+                                <option value="GTC">GTC</option>
+                            </select>
+                        </div>
+                        <div className="tp-price-section">
+                            <label>STOP LOSS</label>
+                            <div className="tp-price-input-wrap">
+                                <span className="tp-currency">$</span>
+                                <input
+                                    type="number"
+                                    step="0.25"
+                                    placeholder="Optional"
+                                    value={stopLoss}
+                                    onChange={(e) => setStopLoss(e.target.value)}
+                                    className="tp-price-input"
+                                />
+                            </div>
+                        </div>
+                        <div className="tp-price-section">
+                            <label>TAKE PROFIT</label>
+                            <div className="tp-price-input-wrap">
+                                <span className="tp-currency">$</span>
+                                <input
+                                    type="number"
+                                    step="0.25"
+                                    placeholder="Optional"
+                                    value={takeProfit}
+                                    onChange={(e) => setTakeProfit(e.target.value)}
+                                    className="tp-price-input"
+                                />
+                            </div>
+                        </div>
                     </div>
 
                     <div className="tp-order-types">
@@ -582,6 +636,10 @@ export default function TradingPanel({ livePrices = {} }) {
                                 <span>{orderType}</span>
                             </div>
                             <div className="tp-cd-row">
+                                <span>Duration</span>
+                                <span>{durationType}</span>
+                            </div>
+                            <div className="tp-cd-row">
                                 <span>Qty / Account</span>
                                 <span>{quantity}</span>
                             </div>
@@ -595,6 +653,18 @@ export default function TradingPanel({ livePrices = {} }) {
                                 <div className="tp-cd-row">
                                     <span>Stop Price</span>
                                     <span>${stopPrice}</span>
+                                </div>
+                            )}
+                            {stopLoss && (
+                                <div className="tp-cd-row">
+                                    <span>Stop Loss</span>
+                                    <span>${stopLoss}</span>
+                                </div>
+                            )}
+                            {takeProfit && (
+                                <div className="tp-cd-row">
+                                    <span>Take Profit</span>
+                                    <span>${takeProfit}</span>
                                 </div>
                             )}
                             <div className="tp-cd-divider" />
@@ -816,4 +886,3 @@ export default function TradingPanel({ livePrices = {} }) {
         </div>
     );
 }
-

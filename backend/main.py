@@ -4,8 +4,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from database import Base, engine
-from routers import accounts, groups, instruments, strategy, users, trading, market_data, market, panel_orders
+from database import Base, engine, ensure_runtime_schema
+from routers import accounts, groups, instruments, strategy, users, trading, market_data, market, panel_orders, broker_data
 import models_market_data  # Ensure market data tables are registered with Base
 
 # Configure logging
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create all tables on startup (including new ones)
+    ensure_runtime_schema()
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created/verified")
 
@@ -73,6 +74,7 @@ app.include_router(trading.router)        # New trading system endpoints
 app.include_router(market_data.router)    # Market data collection & backtesting
 app.include_router(market.router)          # Live market data (SSE streaming)
 app.include_router(panel_orders.router)    # Trading panel manual orders
+app.include_router(broker_data.router)      # Broker data via TV Bridge API
 
 
 @app.get("/")

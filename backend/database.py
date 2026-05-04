@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./hedging.db")
@@ -28,3 +28,16 @@ def get_db():
     finally:
         db.close()
 
+
+def ensure_runtime_schema():
+    """Apply small idempotent schema fixes for deployments without Alembic."""
+    inspector = inspect(engine)
+    if "accounts" not in inspector.get_table_names():
+        return
+
+    account_columns = {column["name"] for column in inspector.get_columns("accounts")}
+    if "tv_account_id" in account_columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE accounts ADD COLUMN tv_account_id VARCHAR"))

@@ -123,8 +123,7 @@ class BaseStrategy(ABC):
         Place an order through the Tradovate API.
         If paper_mode is True, simulate the order instead.
         """
-        from required_api.tradovate_client import get_proxied_client
-        from models import BrokerCredential, User
+        from services.tv_bridge_service import place_order_for_accounts
 
         if self.paper_mode:
             import random
@@ -141,65 +140,33 @@ class BaseStrategy(ABC):
                 "paper": True,
             }
 
-        # Real order
-        cred = (
-            self.db.query(BrokerCredential)
-            .filter(BrokerCredential.id == account.credential_id)
-            .first()
-        )
-        if not cred:
-            raise RuntimeError(f"No credential for account {account.name}")
-
-        # Route through user's dedicated IP
-        user = self.db.query(User).filter(User.id == cred.user_id).first()
-        client = get_proxied_client(user=user)
-        token, error = client.login(cred.login_id, cred.password)
-        if not token:
-            raise RuntimeError(f"Login failed for {account.name}: {error}")
-
-        if not account.tradovate_account_id:
-            raise RuntimeError(f"Missing tradovate_account_id for {account.name}")
-
-        result = client.place_order(
-            account_id=account.tradovate_account_id,
-            account_spec=account.name,
-            symbol=symbol,
-            action=action,
+        report = place_order_for_accounts(
+            self.db,
+            accounts=[account],
+            instrument=symbol,
+            side=action,
             qty=qty,
             order_type=order_type,
         )
+        result = report["results"][0]
+        if not result.get("success"):
+            raise RuntimeError(result.get("error") or f"Order failed for {account.name}")
 
         self.audit("ORDER_PLACED", {
             "account": account.name, "symbol": symbol,
             "action": action, "qty": qty, "result": result,
         })
-        return result
+        return result.get("result", result)
 
     def cancel_broker_order(self, account, broker_order_id: int) -> dict:
         """Cancel an order on the broker."""
-        from required_api.tradovate_client import get_proxied_client
-        from models import BrokerCredential, User
+        from services.tv_bridge_service import cancel_order
 
         if self.paper_mode:
             self.logger.info(f"[PAPER] Cancel order {broker_order_id} on {account.name}")
             return {"cancelled": True, "paper": True}
 
-        cred = (
-            self.db.query(BrokerCredential)
-            .filter(BrokerCredential.id == account.credential_id)
-            .first()
-        )
-        if not cred:
-            raise RuntimeError(f"No credential for account {account.name}")
-
-        # Route through user's dedicated IP
-        user = self.db.query(User).filter(User.id == cred.user_id).first()
-        client = get_proxied_client(user=user)
-        token, error = client.login(cred.login_id, cred.password)
-        if not token:
-            raise RuntimeError(f"Login failed: {error}")
-
-        result = client.cancel_order(broker_order_id)
+        result = cancel_order(self.db, account, broker_order_id)
         self.audit("ORDER_CANCELLED", {
             "account": account.name, "broker_order_id": broker_order_id,
             "result": result,

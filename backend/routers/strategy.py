@@ -156,26 +156,20 @@ def execute_group_hedge(order_id: int, price: float = None, db: Session = Depend
 
 @router.get("/last-price")
 def get_last_price(symbol: str, db: Session = Depends(get_db)):
-    """Get the last traded price for a symbol via Tradovate."""
-    from models import User, BrokerCredential
-    from required_api.tradovate_client import get_proxied_client
-
-    # Find any user with credentials to use for the API call
-    cred = db.query(BrokerCredential).filter(BrokerCredential.is_active == True).first()
-    if not cred:
-        raise HTTPException(status_code=400, detail="No active broker credentials found")
-
-    user = db.query(User).filter(User.id == cred.user_id).first()
-    client = get_proxied_client(user=user)
-    token, err = client.login(cred.login_id, cred.password)
-    if not token:
-        raise HTTPException(status_code=500, detail=f"Login failed: {err}")
+    """Get the last traded price for a symbol from Redis."""
+    from services.tv_bridge_service import get_redis_quote
 
     try:
-        result = client.get_last_price(symbol)
-        return result
+        quote = get_redis_quote(symbol)
+        return {
+            "symbol": symbol,
+            "last_price": quote.get("price"),
+            "bid": quote.get("bid"),
+            "ask": quote.get("ask"),
+            "source": "redis",
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @router.get("/orders", response_model=list[GroupOrderResponse])
@@ -217,8 +211,8 @@ def delete_group_order(order_id: int, db: Session = Depends(get_db)):
 def flatten_strategy(order_id: int, db: Session = Depends(get_db)):
     """Flatten all positions for all accounts in this strategy's group."""
     from sqlalchemy.orm import joinedload
-    from models import Group, GroupMembership, Account, User, BrokerCredential
-    from required_api.tradovate_client import get_proxied_client
+    from models import Group, GroupMembership, Account
+    from services.tv_bridge_service import flatten_accounts
 
     order = db.query(GroupOrder).filter(GroupOrder.id == order_id).first()
     if not order:
@@ -242,39 +236,15 @@ def flatten_strategy(order_id: int, db: Session = Depends(get_db)):
         .all()
     )
 
+    accounts = [m.account for m in memberships if m.account]
     results = []
-    client_cache = {}
-
-    for m in memberships:
-        account = m.account
-        if not account or not account.tradovate_account_id:
-            results.append({"account": account.name if account else "Unknown", "success": False, "error": "Missing tradovate_account_id"})
-            continue
-
-        cred = account.credential
-        if not cred:
-            results.append({"account": account.name, "success": False, "error": "No credential"})
-            continue
-
-        cred_id = cred.id
-        if cred_id not in client_cache:
-            user = db.query(User).filter(User.id == cred.user_id).first()
-            client = get_proxied_client(user=user)
-            token, err = client.login(cred.login_id, cred.password)
-            if not token:
-                results.append({"account": account.name, "success": False, "error": f"Login failed: {err}"})
-                continue
-            client_cache[cred_id] = client
-
-        client = client_cache[cred_id]
-        try:
-            report = client.flatten_account(
-                account_id=account.tradovate_account_id,
-                account_spec=account.name,
-            )
-            results.append({"account": account.name, "success": True, "report": report})
-        except Exception as e:
-            results.append({"account": account.name, "success": False, "error": str(e)})
+    for report in flatten_accounts(db, accounts):
+        results.append({
+            "account": report.get("account"),
+            "success": not report.get("errors"),
+            "report": report,
+            "error": "; ".join(report.get("errors", [])) if report.get("errors") else None,
+        })
 
     # Stop the strategy
     order.status = StrategyStatus.STOPPED
@@ -286,10 +256,10 @@ def flatten_strategy(order_id: int, db: Session = Depends(get_db)):
 
 @router.get("/orders/{order_id}/positions")
 def get_strategy_positions(order_id: int, db: Session = Depends(get_db)):
-    """Get live positions from Tradovate for all accounts in this strategy's group."""
+    """Get live positions from TV Bridge for all accounts in this strategy's group."""
     from sqlalchemy.orm import joinedload
-    from models import Group, GroupMembership, Account, User, BrokerCredential
-    from required_api.tradovate_client import get_proxied_client
+    from models import Group, GroupMembership, Account
+    from services.tv_bridge_service import get_bridge_client, normalize_position, parse_account_state, resolve_tv_account_id
 
     order = db.query(GroupOrder).filter(GroupOrder.id == order_id).first()
     if not order:
@@ -314,51 +284,40 @@ def get_strategy_positions(order_id: int, db: Session = Depends(get_db)):
     )
 
     positions = []
-    client_cache = {}
+    client = get_bridge_client()
 
     for m in memberships:
         account = m.account
-        if not account or not account.tradovate_account_id:
+        if not account:
             continue
 
-        cred = account.credential
-        if not cred:
-            continue
-
-        cred_id = cred.id
-        if cred_id not in client_cache:
-            user = db.query(User).filter(User.id == cred.user_id).first()
-            client = get_proxied_client(user=user)
-            token, err = client.login(cred.login_id, cred.password)
-            if not token:
-                positions.append({"account_name": account.name, "pod": m.pot, "error": f"Login failed: {err}", "positions": []})
-                continue
-            client_cache[cred_id] = client
-
-        client = client_cache[cred_id]
         try:
-            acct_positions = client.get_positions(account.tradovate_account_id)
-            # Also get account balance for P&L context
-            state = client.get_account_balance(account.tradovate_account_id)
-            balance = float(state.get("balance") or state.get("cashBalance") or 0)
-            realized_pnl = float(state.get("realizedPnl") or 0)
-            unrealized_pnl = float(state.get("openPnl") or state.get("unrealizedPnl") or 0)
+            tv_account_id = resolve_tv_account_id(db, account, client=client)
+            acct_positions = client.get_tv_positions(tv_account_id)
+            state = parse_account_state(client.get_tv_account_state(tv_account_id))
+            balance = float(state.get("balance") or state.get("netLiq") or 0)
+            realized_pnl = float(state.get("totalPl") or 0)
+            unrealized_pnl = float(state.get("unrealizedPl") or state.get("openPl") or 0)
 
             pos_list = []
             for p in acct_positions:
-                net_pos = p.get("netPos", 0)
-                if net_pos == 0:
+                normalized = normalize_position(p, account)
+                qty = normalized.get("qty") or 0
+                if qty == 0:
                     continue
                 pos_list.append({
-                    "contract": p.get("contractId"),
-                    "net_position": net_pos,
-                    "average_price": float(p.get("netPrice") or p.get("avgPrice") or 0),
-                    "unrealized_pnl": float(p.get("openPnl") or 0),
+                    "contract": normalized.get("instrument"),
+                    "position_id": normalized.get("id"),
+                    "side": normalized.get("side"),
+                    "net_position": qty if normalized.get("side") in ("buy", "long") else -qty,
+                    "average_price": float(normalized.get("avgPrice") or 0),
+                    "unrealized_pnl": float(normalized.get("unrealizedPl") or 0),
                 })
 
             positions.append({
                 "account_name": account.name,
                 "account_id": account.id,
+                "tv_account_id": tv_account_id,
                 "pod": m.pot,
                 "balance": balance,
                 "realized_pnl": realized_pnl,

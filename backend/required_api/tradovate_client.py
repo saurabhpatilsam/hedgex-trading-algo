@@ -28,6 +28,9 @@ AUTH_URL = "https://tv-demo.tradovateapi.com/authorize?locale=en"
 ACCOUNTS_URL = "https://tv-demo.tradovateapi.com/accounts?locale=en"
 TRADOVATE_ACCOUNT_LIST_URL = "https://demo.tradovateapi.com/v1/account/list"
 
+# TV Bridge API base URL (TradingView ↔ Tradovate bridge layer)
+TV_BRIDGE_BASE = "https://tv-demo.tradovateapi.com"
+
 TRADINGVIEW_ORIGIN = "https://www.tradingview.com"
 TRADER_TRADOVATE_ORIGIN = "https://trader.tradovate.com"
 
@@ -39,6 +42,114 @@ PROXY_URLS = {
 
 # Redis-backed token cache key prefix (shared across all uvicorn workers)
 _TOKEN_CACHE_PREFIX = "hx:token:"
+
+# Azure Redis TLS config — primary source for bearer tokens
+AZURE_REDIS_HOST = os.getenv("AZURE_REDIS_HOST", "orca-redis-manager.redis.cache.windows.net")
+AZURE_REDIS_PORT = int(os.getenv("AZURE_REDIS_PORT", "6380"))
+AZURE_REDIS_PASSWORD = os.getenv("AZURE_REDIS_PASSWORD")
+
+# Redis keys to search for bearer tokens (in priority order)
+_BEARER_TOKEN_KEYS = [
+    "bearer_token", "auth_token", "token", "access_token",
+    "Authorization", "jwt", "auth",
+]
+
+_azure_redis_instance = None
+
+
+def _get_azure_redis():
+    """Lazy Azure Redis singleton for bearer token retrieval (TLS on port 6380)."""
+    global _azure_redis_instance
+    if _azure_redis_instance is None:
+        if not AZURE_REDIS_PASSWORD:
+            raise RuntimeError("AZURE_REDIS_PASSWORD must be configured for Azure Redis token lookup")
+        import ssl
+        from redis import Redis
+        _azure_redis_instance = Redis(
+            host=AZURE_REDIS_HOST,
+            port=AZURE_REDIS_PORT,
+            password=AZURE_REDIS_PASSWORD,
+            ssl=True,
+            ssl_cert_reqs=None,
+            decode_responses=True,
+            socket_connect_timeout=10,
+            retry_on_timeout=True,
+        )
+    return _azure_redis_instance
+
+
+def get_bearer_token_from_redis() -> Optional[str]:
+    """
+    Retrieve a bearer token from Azure Redis.
+
+    Search strategy:
+      1. Check well-known key names (bearer_token, auth_token, etc.)
+      2. Scan all keys looking for a JWT-like value
+      3. Check hash fields for token values
+
+    Returns the token string or None.
+    """
+    try:
+        r = _get_azure_redis()
+
+        # Strategy 1: Check well-known keys first
+        for key in _BEARER_TOKEN_KEYS:
+            try:
+                value = r.get(key)
+                if value and _looks_like_token(value):
+                    logger.info(f"[RedisAuth] Found bearer token at key: {key}")
+                    return value
+            except Exception:
+                pass
+
+        # Strategy 2: Check hx:token:* pattern (used by existing login cache)
+        for key in r.scan_iter(match="hx:token:*", count=50):
+            try:
+                raw = r.get(key)
+                if raw:
+                    data = json.loads(raw)
+                    token = data.get("token")
+                    if token and _looks_like_token(token):
+                        logger.info(f"[RedisAuth] Found bearer token in cache key: {key}")
+                        return token
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+        # Strategy 3: Scan all string keys for token-like values
+        for key in r.scan_iter(match="*", count=100):
+            try:
+                key_type = r.type(key)
+                if key_type == "string":
+                    value = r.get(key)
+                    if value and _looks_like_token(value):
+                        logger.info(f"[RedisAuth] Found bearer token at key: {key}")
+                        return value
+                elif key_type == "hash":
+                    hash_data = r.hgetall(key)
+                    for field, val in hash_data.items():
+                        if _looks_like_token(val):
+                            logger.info(f"[RedisAuth] Found bearer token in hash {key}.{field}")
+                            return val
+            except Exception:
+                continue
+
+        logger.warning("[RedisAuth] No bearer token found in Azure Redis")
+        return None
+
+    except Exception as e:
+        logger.error(f"[RedisAuth] Failed to connect to Azure Redis: {e}")
+        return None
+
+
+def _looks_like_token(value: str) -> bool:
+    """Heuristic check if a string looks like a JWT/bearer token."""
+    if not value or not isinstance(value, str):
+        return False
+    return (
+        len(value) > 20
+        and (value.startswith("eyJ") or "." in value)
+        and " " not in value
+    )
 
 
 class TradovateClient:
@@ -847,6 +958,306 @@ class TradovateClient:
             f"{len(report['errors'])} errors"
         )
         return report
+
+    # ═══════════════════════════════════════════════════════════
+    # TV BRIDGE API METHODS (tv-demo.tradovateapi.com)
+    # ═══════════════════════════════════════════════════════════
+
+    def _build_tv_bridge_headers(self) -> Dict[str, str]:
+        """Headers for TV Bridge API calls with Bearer auth."""
+        token = self.access_token
+        if not token:
+            # Try Redis as primary auth source
+            token = get_bearer_token_from_redis()
+            if token:
+                self.access_token = token
+        if not token:
+            raise ValueError("No bearer token available in Redis.")
+        return {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": TRADINGVIEW_ORIGIN,
+            "Referer": f"{TRADINGVIEW_ORIGIN}/",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/136.0.0.0 Safari/537.36"
+            ),
+        }
+
+    def _tv_bridge_get(self, path: str) -> Dict[str, Any]:
+        """Generic GET against the TV Bridge API. Returns the parsed response."""
+        url = f"{TV_BRIDGE_BASE}{path}"
+        headers = self._build_tv_bridge_headers()
+        try:
+            response = self._proxied_request("GET", url, headers=headers, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("s") == "ok":
+                return data.get("d", data)
+            elif data.get("s") == "error":
+                raise RuntimeError(f"TV Bridge error: {data.get('errmsg', 'Unknown error')}")
+            return data
+        except Exception as e:
+            logger.error(f"TV Bridge GET {path} failed: {e}")
+            raise
+
+    def ensure_token(self):
+        """
+        Ensure a valid bearer token is available.
+        Priority: 1) existing token, 2) Azure Redis, 3) raise error.
+        """
+        if self.access_token:
+            return self.access_token
+        token = get_bearer_token_from_redis()
+        if token:
+            self.access_token = token
+            logger.info("[Auth] Token loaded from Azure Redis")
+            return token
+        raise ValueError("No bearer token available in Redis.")
+
+    def get_tv_config(self) -> Dict[str, Any]:
+        """
+        GET /config — Broker capabilities, durations, polling intervals.
+        """
+        return self._tv_bridge_get("/config?locale=en")
+
+    def get_tv_accounts(self) -> List[Dict[str, Any]]:
+        """
+        GET /accounts — List all trading accounts with capability flags.
+        Returns list of account objects with id, name, type, currency, config.
+        """
+        result = self._tv_bridge_get("/accounts?locale=en")
+        return result if isinstance(result, list) else []
+
+    def get_tv_account_state(self, account_id: str) -> Dict[str, Any]:
+        """
+        GET /accounts/{id}/state — Balance, equity, unrealized P/L, margin data.
+        
+        Args:
+            account_id: TV Bridge account ID (e.g. "D18156785")
+        
+        Returns: {
+            "balance": float,
+            "unrealizedPl": float,
+            "equity": float,
+            "amData": [[...]]  — maps to accountManager columns
+        }
+        """
+        return self._tv_bridge_get(f"/accounts/{account_id}/state?locale=en")
+
+    def get_tv_orders(self, account_id: str) -> List[Dict[str, Any]]:
+        """
+        GET /accounts/{id}/orders — All orders for account.
+        Includes working, filled, rejected, cancelled orders.
+        
+        Returns list of order objects with:
+            id, instrument, qty, side, type, status, limitPrice, duration, etc.
+        """
+        result = self._tv_bridge_get(f"/accounts/{account_id}/orders?locale=en")
+        return result if isinstance(result, list) else []
+
+    def get_tv_positions(self, account_id: str) -> List[Dict[str, Any]]:
+        """
+        GET /accounts/{id}/positions — Open positions for account.
+        
+        Returns list of position objects with:
+            id, instrument, qty, side, avgPrice, unrealizedPl
+        """
+        result = self._tv_bridge_get(f"/accounts/{account_id}/positions?locale=en")
+        return result if isinstance(result, list) else []
+
+    def get_tv_instruments(self, account_id: str) -> List[Dict[str, Any]]:
+        """
+        GET /accounts/{id}/instruments — Available instruments/contracts.
+        
+        Returns list with name, description, type, minTick, pipSize, pipValue.
+        """
+        result = self._tv_bridge_get(f"/accounts/{account_id}/instruments?locale=en")
+        return result if isinstance(result, list) else []
+
+    def get_tv_executions(self, account_id: str, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        GET /accounts/{id}/executions — Execution/fill history.
+        
+        Args:
+            account_id: TV Bridge account ID
+            symbol: Optional instrument filter (e.g. "MNQM6")
+        """
+        path = f"/accounts/{account_id}/executions?locale=en"
+        if symbol:
+            path += f"&instrument={urllib.parse.quote(symbol)}"
+        result = self._tv_bridge_get(path)
+        return result if isinstance(result, list) else []
+
+    def get_tv_quotes(self, symbols: List[str], account_id: str) -> List[Dict[str, Any]]:
+        """
+        GET /quotes — Live quotes (bid, ask, last price, OHLCV).
+        
+        Args:
+            symbols: List of symbols (e.g. ["MNQM6", "NQM6"])
+            account_id: TV Bridge account ID
+        
+        Returns list of quote objects with:
+            n (symbol), v.lp (last price), v.ch (change), v.chp (change %),
+            v.bid, v.ask, v.high_price, v.low_price, v.open_price, v.volume
+        """
+        symbols_str = urllib.parse.quote(",".join(symbols))
+        result = self._tv_bridge_get(f"/quotes?locale=en&symbols={symbols_str}&accountId={account_id}")
+        return result if isinstance(result, list) else []
+
+    def place_tv_order(
+        self,
+        account_id: str,
+        instrument: str,
+        side: str,
+        qty: int,
+        order_type: str = "market",
+        limit_price: float = None,
+        stop_price: float = None,
+        stop_loss: float = None,
+        take_profit: float = None,
+        duration_type: str = "Day",
+        current_ask: float = None,
+        current_bid: float = None,
+    ) -> Dict[str, Any]:
+        """
+        POST /accounts/{id}/orders — Place order via TV Bridge.
+        
+        Uses form-encoded body matching the TradingView integration format.
+        """
+        import string
+        import random
+        request_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+        url = f"{TV_BRIDGE_BASE}/accounts/{account_id}/orders?locale=en&requestId={request_id}"
+        headers = self._build_tv_bridge_headers()
+        if current_ask is None or current_bid is None:
+            raise ValueError("currentAsk and currentBid are required for TV Bridge order placement")
+
+        form_data = {
+            "instrument": instrument,
+            "side": side.lower(),
+            "qty": str(qty),
+            "type": order_type.lower(),
+            "durationType": duration_type,
+        }
+        if current_ask is not None:
+            form_data["currentAsk"] = str(current_ask)
+        if current_bid is not None:
+            form_data["currentBid"] = str(current_bid)
+        if limit_price is not None:
+            form_data["limitPrice"] = str(limit_price)
+        if stop_price is not None:
+            form_data["stopPrice"] = str(stop_price)
+        if stop_loss is not None:
+            form_data["stopLoss"] = str(stop_loss)
+        if take_profit is not None:
+            form_data["takeProfit"] = str(take_profit)
+
+        logger.info(f"Placing TV Bridge order: {side} {qty}x {instrument} type={order_type} on {account_id}")
+        try:
+            response = self._proxied_request("POST", url, headers=headers, data=urllib.parse.urlencode(form_data), timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("s") == "ok":
+                logger.info(f"TV Bridge order placed: {data.get('d', {})}")
+                return data.get("d", {})
+            elif data.get("s") == "error":
+                raise RuntimeError(f"Order rejected: {data.get('errmsg', 'Unknown error')}")
+            return data
+        except Exception as e:
+            logger.error(f"TV Bridge order placement failed: {e}")
+            raise
+
+    def modify_tv_order(
+        self,
+        account_id: str,
+        order_id: str,
+        limit_price: float = None,
+        qty: int = None,
+        stop_loss: float = None,
+        take_profit: float = None,
+        current_ask: float = None,
+        current_bid: float = None,
+    ) -> Dict[str, Any]:
+        """
+        PUT /accounts/{id}/orders/{orderId} — Modify a working order.
+        """
+        url = f"{TV_BRIDGE_BASE}/accounts/{account_id}/orders/{order_id}?locale=en"
+        headers = self._build_tv_bridge_headers()
+        if current_ask is None or current_bid is None:
+            raise ValueError("currentAsk and currentBid are required for TV Bridge order modification")
+
+        form_data = {}
+        if current_ask is not None:
+            form_data["currentAsk"] = str(current_ask)
+        if current_bid is not None:
+            form_data["currentBid"] = str(current_bid)
+        if limit_price is not None:
+            form_data["limitPrice"] = str(limit_price)
+        if qty is not None:
+            form_data["qty"] = str(qty)
+        if stop_loss is not None:
+            form_data["stopLoss"] = str(stop_loss)
+        if take_profit is not None:
+            form_data["takeProfit"] = str(take_profit)
+
+        logger.info(f"Modifying TV Bridge order {order_id} on {account_id}")
+        try:
+            response = self._proxied_request("PUT", url, headers=headers, data=urllib.parse.urlencode(form_data), timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("s") == "ok":
+                return data.get("d", {})
+            elif data.get("s") == "error":
+                raise RuntimeError(f"Order modify failed: {data.get('errmsg', 'Unknown error')}")
+            return data
+        except Exception as e:
+            logger.error(f"TV Bridge order modify failed: {e}")
+            raise
+
+    def cancel_tv_order(self, account_id: str, order_id: str) -> Dict[str, Any]:
+        """
+        DELETE /accounts/{id}/orders/{orderId} — Cancel a working order.
+        """
+        url = f"{TV_BRIDGE_BASE}/accounts/{account_id}/orders/{order_id}?locale=en"
+        headers = self._build_tv_bridge_headers()
+
+        logger.info(f"Cancelling TV Bridge order {order_id} on {account_id}")
+        try:
+            response = self._proxied_request("DELETE", url, headers=headers, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("s") == "ok":
+                return data
+            elif data.get("s") == "error":
+                raise RuntimeError(f"Order cancel failed: {data.get('errmsg', 'Unknown error')}")
+            return data
+        except Exception as e:
+            logger.error(f"TV Bridge order cancel failed: {e}")
+            raise
+
+    def close_tv_position(self, account_id: str, position_id: str) -> Dict[str, Any]:
+        """
+        DELETE /accounts/{id}/positions/{posId} — Close/flatten a position.
+        """
+        url = f"{TV_BRIDGE_BASE}/accounts/{account_id}/positions/{position_id}?locale=en"
+        headers = self._build_tv_bridge_headers()
+
+        logger.info(f"Closing TV Bridge position {position_id} on {account_id}")
+        try:
+            response = self._proxied_request("DELETE", url, headers=headers, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("s") == "ok":
+                return data
+            elif data.get("s") == "error":
+                raise RuntimeError(f"Position close failed: {data.get('errmsg', 'Unknown error')}")
+            return data
+        except Exception as e:
+            logger.error(f"TV Bridge position close failed: {e}")
+            raise
 
 
 def get_proxied_client(user=None, user_id: int = None, proxy_region: str = None) -> TradovateClient:

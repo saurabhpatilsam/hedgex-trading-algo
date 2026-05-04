@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
-from models import Account, BrokerCredential, User
+from models import Account, BrokerCredential
 from schemas import AccountCreate, AccountResponse, AccountUpdate
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -115,11 +115,10 @@ def bulk_delete_accounts(payload: BulkAccountIds, db: Session = Depends(get_db))
 @router.post("/flatten")
 def flatten_accounts(payload: BulkAccountIds, db: Session = Depends(get_db)):
     """
-    💀 FLATTEN selected accounts on the broker.
-    Cancels all working orders + closes all open positions with opposing market orders.
+    Flatten selected accounts through TV Bridge.
     """
     import logging
-    from required_api.tradovate_client import get_proxied_client
+    from services.tv_bridge_service import flatten_accounts
 
     logger = logging.getLogger(__name__)
 
@@ -133,53 +132,11 @@ def flatten_accounts(payload: BulkAccountIds, db: Session = Depends(get_db)):
     if not accounts:
         raise HTTPException(status_code=404, detail="No matching accounts found")
 
-    reports = []
-    for account in accounts:
-        cred = account.credential
-        if not cred or not cred.is_active:
-            reports.append({
-                "account_id": account.id,
-                "account": account.name,
-                "error": "Credential inactive or missing",
-            })
-            continue
-
-        if not account.tradovate_account_id:
-            reports.append({
-                "account_id": account.id,
-                "account": account.name,
-                "error": "Missing tradovate_account_id — sync first",
-            })
-            continue
-
-        try:
-            # Get the user for proxy routing
-            user = db.query(User).filter(User.id == cred.user_id).first()
-            client = get_proxied_client(user=user)
-            token, error = client.login(cred.login_id, cred.password)
-            if not token:
-                reports.append({
-                    "account_id": account.id,
-                    "account": account.name,
-                    "error": f"Login failed: {error}",
-                })
-                continue
-
-            report = client.flatten_account(
-                account_id=account.tradovate_account_id,
-                account_spec=account.name,
-            )
-            report["account_id"] = account.id
-            reports.append(report)
-            logger.info(f"Flattened {account.name}")
-
-        except Exception as e:
-            reports.append({
-                "account_id": account.id,
-                "account": account.name,
-                "error": str(e),
-            })
-            logger.error(f"Flatten failed for {account.name}: {e}")
+    try:
+        reports = flatten_accounts(db, accounts)
+    except Exception as e:
+        logger.error(f"Flatten failed: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
 
     total_cancelled = sum(len(r.get("orders_cancelled", [])) for r in reports)
     total_flattened = sum(len(r.get("positions_flattened", [])) for r in reports)
@@ -207,11 +164,11 @@ def flatten_accounts(payload: BulkAccountIds, db: Session = Depends(get_db)):
 @router.post("/sync")
 def sync_selected_accounts(payload: BulkAccountIds, db: Session = Depends(get_db)):
     """
-    Refresh/sync balances for selected accounts only.
+    Refresh/sync balances and TV Bridge account IDs for selected accounts only.
     """
     import logging
     from datetime import datetime, timezone
-    from required_api.tradovate_client import get_proxied_client
+    from services.tv_bridge_service import sync_accounts_from_bridge
 
     logger = logging.getLogger(__name__)
 
@@ -225,71 +182,8 @@ def sync_selected_accounts(payload: BulkAccountIds, db: Session = Depends(get_db
     if not accounts:
         raise HTTPException(status_code=404, detail="No matching accounts found")
 
-    # Group by credential to avoid re-login
-    cred_groups = {}
-    for account in accounts:
-        cred_id = account.credential_id
-        if cred_id not in cred_groups:
-            cred_groups[cred_id] = {
-                "credential": account.credential,
-                "accounts": [],
-            }
-        cred_groups[cred_id]["accounts"].append(account)
-
-    results = []
-    for cred_id, group in cred_groups.items():
-        cred = group["credential"]
-        if not cred or not cred.is_active:
-            for acct in group["accounts"]:
-                results.append({"account_id": acct.id, "account": acct.name, "error": "Credential inactive"})
-            continue
-
-        try:
-            # Get the user for proxy routing
-            user = db.query(User).filter(User.id == cred.user_id).first()
-            client = get_proxied_client(user=user)
-            token, error = client.login(cred.login_id, cred.password)
-            if not token:
-                for acct in group["accounts"]:
-                    results.append({"account_id": acct.id, "account": acct.name, "error": f"Login failed: {error}"})
-                continue
-
-            # Fetch all sub-accounts from broker
-            broker_accounts = client.get_subaccounts()
-            broker_map = {}
-            for ba in broker_accounts:
-                ba_name = ba.get("name", "")
-                ba_balance = ba.get("balance", ba.get("cashBalance", 0))
-                broker_map[ba_name] = ba
-
-            for acct in group["accounts"]:
-                ba = broker_map.get(acct.name)
-                if ba:
-                    acct.balance = ba.get("balance") or ba.get("cashBalance") or acct.balance
-                    acct.last_updated_at = datetime.now(timezone.utc)
-                    if not acct.tradovate_account_id and ba.get("id"):
-                        acct.tradovate_account_id = ba["id"]
-                    results.append({
-                        "account_id": acct.id,
-                        "account": acct.name,
-                        "balance": acct.balance,
-                        "status": "synced",
-                    })
-                else:
-                    results.append({
-                        "account_id": acct.id,
-                        "account": acct.name,
-                        "error": "Not found on broker",
-                    })
-
-        except Exception as e:
-            for acct in group["accounts"]:
-                results.append({"account_id": acct.id, "account": acct.name, "error": str(e)})
-
-    db.commit()
-    return {
-        "synced": len([r for r in results if r.get("status") == "synced"]),
-        "errors": len([r for r in results if r.get("error")]),
-        "results": results,
-    }
-
+    try:
+        return sync_accounts_from_bridge(db, accounts)
+    except Exception as e:
+        logger.error(f"Account sync failed: {e}")
+        raise HTTPException(status_code=503, detail=str(e))

@@ -743,6 +743,7 @@ export default function AccountManager() {
                                                                     <div className="sub-acct-header">
                                                                         <div></div>{/* Checkbox */}
                                                                         <div className="sub-header-cell left">Account Name</div>
+                                                                        <div className="sub-header-cell">TV ID</div>
                                                                         <div className="sub-header-cell">Balance</div>
                                                                         <div className="sub-header-cell">Buffer</div>
                                                                         <div className="sub-header-cell">Liq. Limit</div>
@@ -772,6 +773,12 @@ export default function AccountManager() {
                                                                                         {acct.name && acct.name.length > 8
                                                                                             ? `${acct.name.substring(0, 4)}...${acct.name.substring(acct.name.length - 4)}`
                                                                                             : acct.name}
+                                                                                    </span>
+                                                                                    <span
+                                                                                        className={`sub-compact-metric ${acct.tv_account_id ? "" : "mapping-missing"}`}
+                                                                                        title={acct.tv_account_id ? `TV Bridge: ${acct.tv_account_id}` : "No TV Bridge account mapped"}
+                                                                                    >
+                                                                                        {acct.tv_account_id || "Missing"}
                                                                                     </span>
                                                                                     <span className="sub-compact-metric" style={{ fontWeight: 700, color: "var(--gray-100)" }}>
                                                                                         ${acct.balance ? acct.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}

@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from models import (
     Account,
-    BrokerCredential,
     Group,
     GroupMembership,
     GroupOrder,
@@ -17,7 +16,7 @@ from models import (
     TradeSide,
     TradeStatus,
 )
-from required_api.tradovate_client import get_proxied_client
+from services.tv_bridge_service import get_bridge_client, place_order_for_accounts
 
 logger = logging.getLogger(__name__)
 
@@ -124,28 +123,13 @@ class HedgingEngine:
     @staticmethod
     def _login_for_account(db: Session, account: Account) -> tuple:
         """
-        Login to Tradovate for a specific account's credential.
-        Routes through the user's dedicated proxy IP.
+        Create a Redis-token-backed TV Bridge client.
         Returns (client, error_message).
         """
-        from models import User
-
-        cred = (
-            db.query(BrokerCredential)
-            .filter(BrokerCredential.id == account.credential_id)
-            .first()
-        )
-        if not cred:
-            return None, f"No credential found for account {account.name}"
-
-        # Route through user's dedicated IP
-        user = db.query(User).filter(User.id == cred.user_id).first()
-        client = get_proxied_client(user=user)
-        token, error = client.login(cred.login_id, cred.password)
-        if not token:
-            return None, f"Login failed for {account.name}: {error}"
-
-        return client, None
+        try:
+            return get_bridge_client(), None
+        except Exception as error:
+            return None, str(error)
 
     @staticmethod
     def execute_group_order(db: Session, order_id: int, entry_price: float = None) -> list[dict]:
@@ -219,7 +203,7 @@ class HedgingEngine:
             action = "Buy" if side == TradeSide.LONG else "Sell"
             broker_order_id = None
             broker_status = None
-            entry_price = 0.0
+            fill_price = 0.0
             error_msg = None
 
             client, login_error = get_client_for_account(account)
@@ -228,27 +212,30 @@ class HedgingEngine:
                 error_msg = login_error
                 broker_status = f"LOGIN_FAILED: {login_error}"
                 logger.error(f"Cannot place order for {account.name}: {login_error}")
-            elif not account.tradovate_account_id:
-                error_msg = f"Missing tradovate_account_id for {account.name}"
-                broker_status = "MISSING_ACCOUNT_ID"
-                logger.error(error_msg)
             else:
                 try:
-                    order_type = "Limit" if entry_price else "Market"
-                    result = client.place_order(
-                        account_id=account.tradovate_account_id,
-                        account_spec=account.name,
-                        symbol=contract_symbol,
-                        action=action,
+                    order_type = "Limit" if entry_price is not None else "Market"
+                    report = place_order_for_accounts(
+                        db,
+                        accounts=[account],
+                        instrument=contract_symbol,
+                        side=action,
                         qty=order.quantity,
                         order_type=order_type,
-                        price=entry_price,
+                        limit_price=entry_price,
+                        stop_loss=stop_loss,
+                        take_profit=profit_target,
+                        client=client,
                     )
+                    result = report["results"][0]
+                    if not result.get("success"):
+                        raise RuntimeError(result.get("error") or "Order rejected")
                     # Extract order details from response
-                    order_info = result.get("orderId") or result.get("id")
+                    raw_result = result.get("result", {})
+                    order_info = result.get("broker_order_id") or raw_result.get("orderId") or raw_result.get("id")
                     broker_order_id = str(order_info) if order_info else str(result)
-                    broker_status = result.get("ordStatus", "Submitted")
-                    entry_price = float(result.get("avgPx", 0) or result.get("price", 0) or 0)
+                    broker_status = raw_result.get("status", "Submitted")
+                    fill_price = float(raw_result.get("avgPx", 0) or raw_result.get("price", 0) or 0)
                     logger.info(
                         f"Order placed: {action} {order.quantity}x {contract_symbol} "
                         f"on {account.name} → orderID={broker_order_id}"
@@ -265,7 +252,7 @@ class HedgingEngine:
                 group_order_id=order.id,
                 side=side,
                 quantity=order.quantity,
-                entry_price=entry_price,
+                entry_price=fill_price,
                 profit_target=profit_target,
                 stop_loss=stop_loss,
                 timestamp=now,
@@ -280,7 +267,7 @@ class HedgingEngine:
                 "instrument": contract_symbol,
                 "side": side.value,
                 "quantity": order.quantity,
-                "price": entry_price,
+                "price": fill_price,
                 "profit_target": profit_target,
                 "stop_loss": stop_loss,
                 "broker_order_id": broker_order_id,
@@ -306,4 +293,3 @@ class HedgingEngine:
 
         db.commit()
         return trades_created
-

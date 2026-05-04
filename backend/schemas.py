@@ -11,12 +11,14 @@ class AccountCreate(BaseModel):
     name: str
     credential_id: int
     account_number: str = ""
+    tv_account_id: Optional[str] = None
     is_active: bool = True
 
 
 class AccountUpdate(BaseModel):
     name: Optional[str] = None
     account_number: Optional[str] = None
+    tv_account_id: Optional[str] = None
     is_active: Optional[bool] = None
 
 
@@ -25,6 +27,7 @@ class AccountResponse(BaseModel):
     name: str
     credential_id: int
     account_number: str
+    tv_account_id: Optional[str] = None
     balance: float = 0.0
     peak_balance: Optional[float] = None
     trailing_drawdown: Optional[float] = None
@@ -127,6 +130,13 @@ class InstrumentResponse(BaseModel):
     id: int
     symbol: str
     name: str
+    instrument_type: Optional[str] = None
+    contract_month: str = ""
+    lot_size: int = 1
+    tick_size: float = 0.25
+    tick_value: float = 12.50
+    margin: float = 0.0
+    is_active: bool = True
 
     model_config = {"from_attributes": True}
 

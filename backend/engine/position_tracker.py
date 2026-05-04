@@ -108,24 +108,13 @@ class PositionTracker:
         }
 
     def get_broker_positions(self, account) -> list[dict]:
-        """Fetch live positions from the broker for reconciliation."""
-        from required_api.tradovate_client import get_proxied_client
-        from models import BrokerCredential, User
+        """Fetch live positions from TV Bridge for reconciliation."""
+        from services.tv_bridge_service import get_bridge_client, normalize_position, resolve_tv_account_id
 
-        cred = (
-            self.db.query(BrokerCredential)
-            .filter(BrokerCredential.id == account.credential_id)
-            .first()
-        )
-        if not cred:
-            return []
-
-        # Route through user's dedicated IP
-        user = self.db.query(User).filter(User.id == cred.user_id).first()
-        client = get_proxied_client(user=user)
-        token, error = client.login(cred.login_id, cred.password)
-        if not token:
+        try:
+            client = get_bridge_client()
+            tv_account_id = resolve_tv_account_id(self.db, account, client=client)
+            return [normalize_position(pos, account) for pos in client.get_tv_positions(tv_account_id)]
+        except Exception as error:
             logger.error(f"Cannot fetch broker positions: {error}")
             return []
-
-        return client.get_positions(account.tradovate_account_id)
