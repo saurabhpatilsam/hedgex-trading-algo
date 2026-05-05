@@ -1,7 +1,65 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { memo, useState, useEffect, useCallback, useRef } from "react";
 import { tradingApi, marketApi } from "../api";
 import TradingPanel from "./TradingPanel";
 import { formatMarketPrice, getDisplayPrice, getQuoteNumber } from "../utils/marketPrice";
+
+const standardizeSymbol = s => typeof s === 'string' ? s.replace(/[\s-]/g, '').toUpperCase() : '';
+const getInstrumentPrefix = s => standardizeSymbol(s).replace(/[A-Z]\d{1,2}$/i, '');
+
+const formatTickerVolume = value => {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return '—';
+    if (Math.abs(number) >= 1_000_000) return `${(number / 1_000_000).toFixed(1)}M`;
+    if (Math.abs(number) >= 1_000) return `${(number / 1_000).toFixed(1)}K`;
+    return number.toLocaleString();
+};
+
+const MarketTickerCard = memo(function MarketTickerCard({ symbol, tick, mdState }) {
+    const price = getDisplayPrice(tick, symbol);
+    const bid = getQuoteNumber(tick?.bid);
+    const ask = getQuoteNumber(tick?.ask);
+
+    let statusColor, statusLabel;
+    if (price != null) {
+        statusColor = '#22c55e';
+        statusLabel = 'Live';
+    } else if (mdState === 'connected') {
+        statusColor = '#facc15';
+        statusLabel = 'Waiting';
+    } else {
+        statusColor = '#ef4444';
+        statusLabel = 'Offline';
+    }
+
+    return (
+        <div className="market-ticker-card">
+            <div className="market-ticker-head">
+                <span className="market-ticker-symbol">{symbol}</span>
+                <span className="market-ticker-status" title={statusLabel} style={{ background: statusColor }} />
+            </div>
+
+            <div className="market-ticker-field market-ticker-price-field">
+                <span className="market-ticker-value">{formatMarketPrice(price, symbol)}</span>
+            </div>
+
+            <div className="market-ticker-book">
+                <div className="market-ticker-field">
+                    <span className="market-ticker-label">Bid</span>
+                    <span className="market-ticker-value">{formatMarketPrice(bid, symbol)}</span>
+                </div>
+                <div className="market-ticker-field">
+                    <span className="market-ticker-label">Ask</span>
+                    <span className="market-ticker-value">{formatMarketPrice(ask, symbol)}</span>
+                </div>
+            </div>
+
+            <div className="market-ticker-field market-ticker-volume-field">
+                <span className="market-ticker-label">Vol</span>
+                <span className="market-ticker-value">{formatTickerVolume(tick?.volume)}</span>
+            </div>
+        </div>
+    );
+});
 
 export default function TradingDashboard() {
     const [strategies, setStrategies] = useState([]);
@@ -186,7 +244,7 @@ export default function TradingDashboard() {
             for (const sym of symbols) {
                 try {
                     const quote = await marketApi.liveQuote(sym);
-                    if (quote?.price != null) {
+                    if (getDisplayPrice(quote, sym) != null) {
                         setLivePrices(prev => ({
                             ...prev,
                             [quote.symbol || sym]: quote,
@@ -200,14 +258,6 @@ export default function TradingDashboard() {
     }, [sseConnected, markPriceUpdate]);
 
     const InstrumentCards = () => {
-        // Normalizes to remove whitespace/hyphens
-        const standardize = s => typeof s === 'string' ? s.replace(/[\s-]/g, '').toUpperCase() : '';
-        // Heuristic to get the underlying instrument prefix (e.g. "MNQM6" -> "MNQ")
-        const getPrefix = s => s.replace(/[A-Z]\d{1,2}$/i, '');
-        const formatSize = value => Number.isFinite(Number(value))
-            ? Number(value).toLocaleString()
-            : '—';
-        
         const mdSymbols = mdStatus?.symbols || [];
         const priceSymbols = Object.keys(livePrices);
         
@@ -216,8 +266,7 @@ export default function TradingDashboard() {
         
         // Pri 1: Symbols that currently have live ticks get highest priority
         priceSymbols.forEach(s => {
-            const std = standardize(s);
-            const pfx = getPrefix(std);
+            const pfx = getInstrumentPrefix(s);
             if (!prefixMap[pfx]) {
                 prefixMap[pfx] = s;
                 finalSymbols.push(s);
@@ -227,8 +276,7 @@ export default function TradingDashboard() {
         // Pri 2: Add MD tracked symbols only if we don't already have that prefix living
         // This naturally removes stale 'H6' / 'G6' offline contracts if the 'M6' variant is already added
         mdSymbols.forEach(s => { 
-            const std = standardize(s);
-            const pfx = getPrefix(std);
+            const pfx = getInstrumentPrefix(s);
             if (!prefixMap[pfx]) {
                 prefixMap[pfx] = s;
                 finalSymbols.push(s);
@@ -240,60 +288,14 @@ export default function TradingDashboard() {
 
         return (
             <div className="market-ticker-strip">
-                {allSymbols.map(symbol => {
-                    const tick = livePrices[symbol];
-                    const price = getDisplayPrice(tick);
-                    const bid = getQuoteNumber(tick?.bid);
-                    const ask = getQuoteNumber(tick?.ask);
-                    const change = tick?.change ?? 0;
-                    const isUp = change > 0;
-                    const isDown = change < 0;
-
-                    // Status: green = receiving ticks, yellow = connected but no data, red = disconnected
-                    let statusColor, statusLabel;
-                    if (price != null) {
-                        statusColor = '#22c55e';
-                        statusLabel = 'Live';
-                    } else if (mdStatus?.state === 'connected') {
-                        statusColor = '#facc15';
-                        statusLabel = 'Waiting';
-                    } else {
-                        statusColor = '#ef4444';
-                        statusLabel = 'Offline';
-                    }
-
-                    return (
-                        <div key={symbol} className="market-ticker-card">
-                            <div className="market-ticker-avatar">
-                                {standardize(symbol).charAt(0) || '?'}
-                            </div>
-
-                            <div className="market-ticker-main">
-                                <div className="market-ticker-title-row">
-                                    <span className="market-ticker-symbol">{symbol}</span>
-                                    <span className="market-ticker-status" title={statusLabel} style={{ background: statusColor }} />
-                                </div>
-                                <div className="market-ticker-price">
-                                    {formatMarketPrice(price)}
-                                </div>
-                            </div>
-
-                            <div className="market-ticker-side">
-                                <div className="market-ticker-quote-row">
-                                    <span>B</span>
-                                    <span>{formatMarketPrice(bid)}</span>
-                                </div>
-                                <div className="market-ticker-quote-row">
-                                    <span>A</span>
-                                    <span>{formatMarketPrice(ask)}</span>
-                                </div>
-                                <div className={`market-ticker-meta ${isUp ? 'up' : isDown ? 'down' : ''}`}>
-                                    {change !== 0 ? `${isUp ? '↗' : '↘'} ${Math.abs(change).toFixed(2)}` : `Vol ${formatSize(tick?.volume)}`}
-                                </div>
-                            </div>
-                        </div>
-                    );
-                })}
+                {allSymbols.map(symbol => (
+                    <MarketTickerCard
+                        key={symbol}
+                        symbol={symbol}
+                        tick={livePrices[symbol]}
+                        mdState={mdStatus?.state}
+                    />
+                ))}
             </div>
         );
     };

@@ -74,6 +74,36 @@ class MarketDataServiceParserTests(unittest.TestCase):
         self.assertEqual(tick["high"], 28155.0)
         self.assertEqual(tick["low"], 27727.5)
 
+    def test_quote_only_update_keeps_last_trade_price(self):
+        from services.market_data_service import MarketDataService
+
+        service = object.__new__(MarketDataService)
+        service.redis = FakeRedis()
+        service.authorized = True
+        service.last_prices = {"MNQM6": {"price": 28138.50}}
+        service._contract_map = {4327110: "MNQM6"}
+        service._tick_count = 0
+
+        service._handle_json_data({
+            "e": "md",
+            "d": {
+                "quotes": [{
+                    "contractId": 4327110,
+                    "entries": {
+                        "Bid": {"price": 28138.25, "size": 5},
+                        "Offer": {"price": 28138.75, "size": 2},
+                    },
+                }]
+            },
+        })
+
+        hset = next(cmd for cmd in service.redis.pipe.commands if cmd[0] == "hset")
+        tick = json.loads(hset[1][2])
+
+        self.assertEqual(tick["price"], 28138.50)
+        self.assertEqual(tick["bid"], 28138.25)
+        self.assertEqual(tick["ask"], 28138.75)
+
 
 if __name__ == "__main__":
     unittest.main()

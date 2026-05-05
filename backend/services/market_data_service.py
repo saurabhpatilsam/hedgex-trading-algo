@@ -301,8 +301,12 @@ class MarketDataService:
 
         tick["symbol"] = symbol
 
+        previous_tick = self.last_prices.get(symbol, {})
+        if tick.get("price") is None and previous_tick.get("price") is not None:
+            tick["price"] = previous_tick["price"]
+
         # Calculate change
-        last = self.last_prices.get(symbol, {}).get("price")
+        last = previous_tick.get("price")
         if last and tick.get("price"):
             tick["change"] = round(tick["price"] - last, 4)
         else:

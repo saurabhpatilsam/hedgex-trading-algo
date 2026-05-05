@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { panelApi, groupsApi, instrumentsApi, accountsApi, usersApi, marketApi } from "../api";
-import { getDisplayPrice, getQuoteNumber } from "../utils/marketPrice";
+import { formatMarketPrice, getDisplayPrice, getQuoteNumber, getTickSize } from "../utils/marketPrice";
 
 /**
  * TradingPanel V2 — Professional order placement panel (NinjaTrader-inspired).
@@ -68,6 +68,7 @@ export default function TradingPanel({ livePrices = {} }) {
     const totalContracts = accountCount * quantity;
 
     const contractSymbol = selectedInstrument?.contract_month || selectedInstrument?.symbol || "";
+    const instrumentTickSize = selectedInstrument?.tick_size ?? getTickSize(contractSymbol);
     const liveTick = livePrices[contractSymbol];
 
     // ── Redis price polling fallback ─────────────────────
@@ -76,7 +77,7 @@ export default function TradingPanel({ livePrices = {} }) {
 
     useEffect(() => {
         // If SSE provides no data for this symbol, poll the Redis-backed quote endpoint.
-        const sseHasData = getDisplayPrice(liveTick) != null;
+        const sseHasData = getDisplayPrice(liveTick, contractSymbol, instrumentTickSize) != null;
         if (sseHasData || !contractSymbol) {
             // SSE is working, clear any fallback interval
             if (fallbackRef.current) {
@@ -89,7 +90,7 @@ export default function TradingPanel({ livePrices = {} }) {
         // Start polling
         const poll = () => {
             marketApi.liveQuote(contractSymbol).then(data => {
-                if (data?.price != null) {
+                if (getDisplayPrice(data, contractSymbol, instrumentTickSize) != null) {
                     setFallbackPrice(data);
                 }
             }).catch(() => { });
@@ -103,10 +104,10 @@ export default function TradingPanel({ livePrices = {} }) {
                 fallbackRef.current = null;
             }
         };
-    }, [contractSymbol, liveTick]);
+    }, [contractSymbol, instrumentTickSize, liveTick]);
 
     const liveData = liveTick || (fallbackPrice?.symbol === contractSymbol ? fallbackPrice : {});
-    const currentPrice = getDisplayPrice(liveData);
+    const currentPrice = getDisplayPrice(liveData, contractSymbol, instrumentTickSize);
     const bid = getQuoteNumber(liveData.bid) ?? currentPrice;
     const ask = getQuoteNumber(liveData.ask) ?? currentPrice;
     const change = liveData.change || 0;
@@ -294,11 +295,7 @@ export default function TradingPanel({ livePrices = {} }) {
 
     // ── Format helpers ──────────────────────────────────
     const fmt = (val) => {
-        if (val == null) return "—";
-        return Number(val).toLocaleString("en-US", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-        });
+        return formatMarketPrice(val, contractSymbol, instrumentTickSize);
     };
 
     const fmtTime = (iso) => {
@@ -394,7 +391,7 @@ export default function TradingPanel({ livePrices = {} }) {
                                     <input
                                         ref={priceInputRef}
                                         type="number"
-                                        step="0.25"
+                                        step={instrumentTickSize || 0.25}
                                         placeholder={currentPrice ? fmt(currentPrice) : "0.00"}
                                         value={price}
                                         onChange={(e) => setPrice(e.target.value)}
@@ -419,7 +416,7 @@ export default function TradingPanel({ livePrices = {} }) {
                                     <input
                                         ref={stopInputRef}
                                         type="number"
-                                        step="0.25"
+                                        step={instrumentTickSize || 0.25}
                                         placeholder="0.00"
                                         value={stopPrice}
                                         onChange={(e) => setStopPrice(e.target.value)}
