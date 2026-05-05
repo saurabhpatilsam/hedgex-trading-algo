@@ -45,18 +45,53 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
   deploy-backend:
-    name: Deploy Backend to Render
+    name: Deploy Backend to Azure VM
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Trigger Render Webhook
+      - name: Azure CLI Login
         run: |
-          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" ]; then
-            echo "Error: RENDER_DEPLOY_HOOK_URL is not set."
-            echo "Ensure the webhook URL is saved in GitHub Secrets."
+          az login \
+            --service-principal \
+            --username "${{ secrets.AZURE_CLIENT_ID }}" \
+            --password "${{ secrets.AZURE_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.AZURE_TENANT_ID }}"
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      - name: Deploy Backend to HX VM
+        run: |
+          set -euo pipefail
+
+          REDIS_HOST=$(az webapp config appsettings list \
+            --resource-group container-orca-rg \
+            --name container-orca-api-20260422 \
+            --query "[?name=='REDIS_HOST'].value | [0]" \
+            -o tsv)
+          REDIS_PORT=$(az webapp config appsettings list \
+            --resource-group container-orca-rg \
+            --name container-orca-api-20260422 \
+            --query "[?name=='REDIS_PORT'].value | [0]" \
+            -o tsv)
+          REDIS_KEY=$(az webapp config appsettings list \
+            --resource-group container-orca-rg \
+            --name container-orca-api-20260422 \
+            --query "[?name=='REDIS_PASSWORD'].value | [0]" \
+            -o tsv)
+
+          if [ -z "$REDIS_HOST" ] || [ -z "$REDIS_PORT" ] || [ -z "$REDIS_KEY" ]; then
+            echo "Redis app settings are missing from container-orca-api-20260422."
             exit 1
           fi
-          echo "Triggering Render webhook..."
-          curl -X POST -d {} ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+
+          echo "::add-mask::$REDIS_KEY"
+          REDIS_KEY_HEX=$(REDIS_KEY="$REDIS_KEY" python3 -c 'import os; print(os.environ["REDIS_KEY"].encode().hex())')
+
+          az vm run-command invoke \
+            --resource-group HX \
+            --name hx-proxy-india \
+            --command-id RunShellScript \
+            --scripts @.github/scripts/deploy_hx_backend.sh \
+            --parameters "$REDIS_HOST" "$REDIS_PORT" "$REDIS_KEY_HEX" "$GITHUB_SHA" \
+            --output json
