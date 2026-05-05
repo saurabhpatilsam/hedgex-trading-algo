@@ -29,9 +29,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database import SessionLocal
 from models import Instrument, BrokerCredential, User
 from required_api.tradovate_client import get_proxied_client
+from services.redis_config import build_redis_client, redis_connection_info
 
 # ── Config ────────────────────────────────────────────────
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 WS_URL = "wss://md.tradovateapi.com/v1/websocket"
 HEARTBEAT_INTERVAL = 30  # seconds
 RECONNECT_DELAY = 5      # seconds
@@ -47,7 +47,12 @@ logger = logging.getLogger("hedgex-md")
 
 class MarketDataService:
     def __init__(self):
-        self.redis = redis.from_url(REDIS_URL, decode_responses=True)
+        logger.info("Connecting market data Redis: %s", redis_connection_info())
+        self.redis = build_redis_client(
+            decode_responses=True,
+            socket_timeout=10,
+            socket_connect_timeout=10,
+        )
         self.access_token = None
         self.ws = None
         self.symbols = []

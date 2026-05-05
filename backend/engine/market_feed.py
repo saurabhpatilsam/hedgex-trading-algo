@@ -41,6 +41,7 @@ class MarketFeedManager:
         self._redis: Redis = None
         self._tick_count: int = 0
         self._last_summary: float = 0
+        self._last_config_refresh: float = 0
         self._tick_counts_by_sym: Dict[str, int] = defaultdict(int)
         self._cached_login: str = None
         self._cached_password: str = None
@@ -57,21 +58,13 @@ class MarketFeedManager:
         from routers.market import get_redis
         self._redis = get_redis()
 
-        # Load instruments and credentials from DB (one-time, resilient)
+        # Load instruments and credentials from DB; the pump refreshes this periodically.
         self._load_config_from_db()
-
-        if not self.active_symbols:
-            logger.error("[MarketFeed] No active instruments found. Feed will not start.")
-            return
-
-        if not self._cached_login:
-            logger.error("[MarketFeed] No credentials found. Feed will not start.")
-            return
 
         asyncio.create_task(self._pump_loop())
 
     def _load_config_from_db(self):
-        """One-time DB read to load instruments and credentials. Non-fatal on failure."""
+        """Refresh instruments and credentials from DB. Non-fatal on failure."""
         try:
             from database import SessionLocal
             from models import BrokerCredential, Instrument
@@ -80,10 +73,15 @@ class MarketFeedManager:
             try:
                 # Load instruments
                 instruments = db.query(Instrument).filter(Instrument.is_active == True).all()
+                next_symbols = set()
                 for inst in instruments:
                     sym = inst.contract_month or inst.symbol
-                    self.active_symbols.add(sym)
-                    logger.info(f"[MarketFeed] Tracking: {sym}")
+                    if sym:
+                        next_symbols.add(sym)
+
+                if next_symbols != self.active_symbols:
+                    logger.info(f"[MarketFeed] Tracking symbols refreshed: {sorted(next_symbols)}")
+                self.active_symbols = next_symbols
 
                 # Load first active credential and cache it (never query DB again)
                 cred = db.query(BrokerCredential).filter(BrokerCredential.is_active == True).first()
@@ -91,10 +89,15 @@ class MarketFeedManager:
                     self._cached_login = cred.login_id
                     self._cached_password = cred.password
                     logger.info(f"[MarketFeed] Cached credential for user: {cred.login_id[:8]}***")
+                self._last_config_refresh = time.time()
             finally:
                 db.close()
         except Exception as e:
             logger.error(f"[MarketFeed] DB load failed (non-fatal): {e}")
+
+    def _refresh_config_if_due(self, interval: int = 60):
+        if time.time() - self._last_config_refresh >= interval:
+            self._load_config_from_db()
 
     def _get_token(self) -> str:
         """Get a valid Tradovate token using the global Redis cache.
@@ -158,6 +161,21 @@ class MarketFeedManager:
         self._update_status("starting")
 
         while self._running:
+            self._refresh_config_if_due()
+            if not self.active_symbols:
+                logger.error("[MarketFeed] No active instruments found. Retrying DB refresh soon.")
+                self._update_status("waiting_for_symbols")
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, max_delay)
+                continue
+
+            if not self._cached_login:
+                logger.error("[MarketFeed] No credentials found. Retrying DB refresh soon.")
+                self._update_status("waiting_for_credentials")
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, max_delay)
+                continue
+
             token = self._get_token()
             if not token:
                 self._update_status("reconnecting")

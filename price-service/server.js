@@ -17,6 +17,11 @@ const REDIS_HOST = process.env.REDIS_HOST;
 const REDIS_PORT = process.env.REDIS_PORT || 6380;
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD;
 const PORT = process.env.PORT || 4000;
+const TICK_CHANNELS = (process.env.REDIS_TICK_CHANNELS || 'hx:ticks')
+  .split(',')
+  .map(channel => channel.trim())
+  .filter(Boolean);
+const LEGACY_PRICE_PATTERN = process.env.REDIS_PRICE_PATTERN || 'price:*';
 
 // Setup Redis client for subscription
 const redisSubscriber = new Redis({
@@ -37,12 +42,18 @@ const latestPrices = new Map();
 
 redisSubscriber.on('connect', () => {
   console.log('✅ Connected to Azure Redis via TLS');
-  // Subscribe to a generic price pattern. We assume channels like 'price:MNQ', 'price:ES'
-  redisSubscriber.psubscribe('price:*', (err, count) => {
+  redisSubscriber.subscribe(...TICK_CHANNELS, (err, count) => {
     if (err) {
-      console.error('Failed to subscribe:', err);
+      console.error('Failed to subscribe to Redis tick channels:', err);
     } else {
-      console.log(`Subscribed to ${count} pattern(s). Waiting for prices...`);
+      console.log(`Subscribed to ${count} channel(s): ${TICK_CHANNELS.join(', ')}`);
+    }
+  });
+  redisSubscriber.psubscribe(LEGACY_PRICE_PATTERN, (err, count) => {
+    if (err) {
+      console.error('Failed to subscribe to Redis price pattern:', err);
+    } else {
+      console.log(`Subscribed to ${count} pattern(s): ${LEGACY_PRICE_PATTERN}`);
     }
   });
 });
@@ -51,15 +62,10 @@ redisSubscriber.on('error', (err) => {
   console.error('❌ Redis Connection Error:', err.message);
 });
 
-// Handle incoming published messages
-redisSubscriber.on('pmessage', (pattern, channel, message) => {
-  // Extract symbol from channel, e.g., 'price:MNQ' -> 'MNQ'
-  const symbol = channel.split(':').pop();
-  
+function parsePricePayload(message) {
   let parsedData;
   try {
     parsedData = JSON.parse(message);
-    // If it's a simple number inside quotes or similar, handle it
     if (typeof parsedData === 'number') {
       parsedData = { price: parsedData, close: parsedData, time: Date.now() / 1000 };
     }
@@ -72,6 +78,11 @@ redisSubscriber.on('pmessage', (pattern, channel, message) => {
       parsedData = { raw: message };
     }
   }
+  return parsedData;
+}
+
+function publishPrice(symbol, parsedData) {
+  if (!symbol) return;
 
   // Update our local cache
   latestPrices.set(symbol, parsedData);
@@ -88,6 +99,20 @@ redisSubscriber.on('pmessage', (pattern, channel, message) => {
       client.send(payload);
     }
   });
+}
+
+// Handle hx:ticks channel published by backend market data services
+redisSubscriber.on('message', (channel, message) => {
+  const parsedData = parsePricePayload(message);
+  const symbol = parsedData.symbol || parsedData.contract_month || parsedData.n;
+  publishPrice(symbol, parsedData);
+});
+
+// Backward compatibility for older channels like price:MNQ
+redisSubscriber.on('pmessage', (pattern, channel, message) => {
+  const parsedData = parsePricePayload(message);
+  const symbol = parsedData.symbol || parsedData.contract_month || channel.split(':').pop();
+  publishPrice(symbol, parsedData);
 });
 
 // WebSocket Server Event Handlers

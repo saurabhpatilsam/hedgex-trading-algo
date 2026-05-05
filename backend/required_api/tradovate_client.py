@@ -15,10 +15,13 @@ def _get_redis():
     """Lazy Redis singleton shared by all token-cache callers."""
     global _redis_instance
     if _redis_instance is None:
-        from redis import Redis
-        # Default to localhost if REDIS_URL not in environment
-        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-        _redis_instance = Redis.from_url(redis_url, decode_responses=True)
+        from services.redis_config import build_redis_client
+
+        _redis_instance = build_redis_client(
+            decode_responses=True,
+            socket_timeout=10,
+            socket_connect_timeout=10,
+        )
     return _redis_instance
 
 _redis_instance = None

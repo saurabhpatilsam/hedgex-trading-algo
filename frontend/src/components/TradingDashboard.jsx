@@ -22,6 +22,7 @@ export default function TradingDashboard() {
     const [flashSymbol, setFlashSymbol] = useState(null);
     const eventSourceRef = useRef(null);
     const flashTimeoutRef = useRef(null);
+    const lastPriceUpdateRef = useRef(0);
 
     const refresh = useCallback(async () => {
         setLoading(true);
@@ -107,6 +108,10 @@ export default function TradingDashboard() {
 
     const unreadAlerts = alerts.filter((a) => !a.is_read).length;
 
+    const markPriceUpdate = useCallback(() => {
+        lastPriceUpdateRef.current = Date.now();
+    }, []);
+
     // ── Live Price SSE Connection ────────────────────────
     useEffect(() => {
         // Check MD service status
@@ -125,6 +130,7 @@ export default function TradingDashboard() {
                 const data = JSON.parse(e.data);
                 if (data.prices) {
                     setLivePrices(data.prices);
+                    if (Object.keys(data.prices).length > 0) markPriceUpdate();
                 }
             } catch { }
         });
@@ -137,6 +143,7 @@ export default function TradingDashboard() {
                         ...prev,
                         [tick.symbol]: tick,
                     }));
+                    markPriceUpdate();
                     // Flash effect
                     setFlashSymbol(tick.symbol);
                     if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
@@ -159,26 +166,28 @@ export default function TradingDashboard() {
             clearInterval(statusInterval);
             if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
         };
-    }, []);
+    }, [markPriceUpdate]);
 
     // ── Instrument Cards Component ──────────────────────
     const FALLBACK_INSTRUMENTS = ['ESM6', 'GCM6', 'MESM6', 'MGCM6', 'MNQM6', 'NQM6'];
 
-    // Fallback: if SSE not working, poll prices every 3s via cached Redis, then direct REST
+    // Fallback: if SSE is disconnected or stale, poll prices via the Redis-backed REST API.
     const fallbackSymbolsRef = useRef(FALLBACK_INSTRUMENTS);
     useEffect(() => {
-        if (sseConnected) return;
-
         const fallback = setInterval(async () => {
+            const streamIsFresh = sseConnected && lastPriceUpdateRef.current && Date.now() - lastPriceUpdateRef.current < 10000;
+            if (streamIsFresh) return;
+
             try {
                 const data = await marketApi.prices();
                 if (data.prices && Object.keys(data.prices).length > 0) {
                     setLivePrices(data.prices);
+                    markPriceUpdate();
                     return; // Redis pipeline is working
                 }
             } catch { }
 
-            // Redis returned nothing — poll Tradovate directly per symbol
+            // Redis snapshot returned nothing; try Redis quote lookup per symbol.
             const symbols = fallbackSymbolsRef.current;
             for (const sym of symbols) {
                 try {
@@ -188,12 +197,13 @@ export default function TradingDashboard() {
                             ...prev,
                             [quote.symbol || sym]: quote,
                         }));
+                        markPriceUpdate();
                     }
                 } catch { }
             }
         }, 5000);
         return () => clearInterval(fallback);
-    }, [sseConnected]);
+    }, [sseConnected, markPriceUpdate]);
 
     const InstrumentCards = () => {
         // Normalizes to remove whitespace/hyphens

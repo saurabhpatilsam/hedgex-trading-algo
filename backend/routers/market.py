@@ -12,15 +12,24 @@ import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import Dict, Optional
 
-import redis
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
+from services.redis_config import build_redis_client, redis_connection_info
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/market", tags=["market-live"])
+
+PRICE_HASH_KEY = os.environ.get("REDIS_PRICE_HASH_KEY", "hx:prices")
+TICK_CHANNELS = tuple(
+    ch.strip() for ch in os.environ.get("REDIS_TICK_CHANNELS", "hx:ticks").split(",") if ch.strip()
+)
+try:
+    PRICE_POLL_INTERVAL = max(0.2, float(os.environ.get("REDIS_PRICE_POLL_INTERVAL", "1.0")))
+except ValueError:
+    PRICE_POLL_INTERVAL = 1.0
 
 # Redis connection (lazy init) with timeouts
 _redis = None
@@ -30,14 +39,49 @@ _executor = ThreadPoolExecutor(max_workers=2)
 def get_redis():
     global _redis
     if _redis is None:
-        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-        _redis = redis.from_url(
-            redis_url,
+        logger.info("Connecting market data Redis: %s", redis_connection_info())
+        _redis = build_redis_client(
             decode_responses=True,
             socket_timeout=3,
-            socket_connect_timeout=3
+            socket_connect_timeout=3,
         )
     return _redis
+
+
+def decode_tick_payload(payload, fallback_symbol: Optional[str] = None) -> Optional[Dict]:
+    """Decode a Redis tick payload into a frontend-safe dict."""
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(payload, dict):
+        return None
+
+    values = payload.get("v") if isinstance(payload.get("v"), dict) else payload
+    symbol = (
+        payload.get("symbol")
+        or payload.get("contract_month")
+        or payload.get("n")
+        or values.get("symbol")
+        or fallback_symbol
+    )
+    if symbol:
+        payload = dict(payload)
+        payload["symbol"] = str(symbol)
+    return payload
+
+
+def decode_price_hash(raw_prices: Dict[str, str]) -> Dict[str, Dict]:
+    """Decode hx:prices hash rows, dropping malformed entries instead of rendering stale errors."""
+    prices = {}
+    for symbol, tick_json in (raw_prices or {}).items():
+        tick = decode_tick_payload(tick_json, fallback_symbol=symbol)
+        if tick:
+            prices[symbol] = tick
+    return prices
 
 
 # ── Latest Prices (snapshot) ──────────────────────────────
@@ -48,14 +92,9 @@ async def get_all_prices():
     """Get the latest price for every instrument from Redis."""
     loop = asyncio.get_event_loop()
     try:
-        raw = await loop.run_in_executor(_executor, lambda: get_redis().hgetall("hx:prices"))
-        prices = {}
-        for symbol, tick_json in raw.items():
-            try:
-                prices[symbol] = json.loads(tick_json)
-            except json.JSONDecodeError:
-                prices[symbol] = {"symbol": symbol, "error": "invalid_data"}
-        return {"prices": prices, "count": len(prices)}
+        raw = await loop.run_in_executor(_executor, lambda: get_redis().hgetall(PRICE_HASH_KEY))
+        prices = decode_price_hash(raw)
+        return {"prices": prices, "count": len(prices), "source": "redis"}
     except Exception as e:
         logger.error(f"Redis error fetching prices: {e}")
         return {"prices": {}, "count": 0, "error": str(e)}
@@ -75,36 +114,58 @@ async def stream_prices():
     async def event_generator():
         r = get_redis()
         pubsub = r.pubsub()
-        pubsub.subscribe("hx:ticks")
+        subscribed_channels = TICK_CHANNELS or ("hx:ticks",)
+        pubsub.subscribe(*subscribed_channels)
         loop = asyncio.get_event_loop()
+        last_seen = {}
+        last_poll = 0.0
 
         try:
             # Send initial snapshot as first event
             all_prices = await loop.run_in_executor(
-                _executor, lambda: r.hgetall("hx:prices")
+                _executor, lambda: r.hgetall(PRICE_HASH_KEY)
             )
-            if all_prices:
+            snapshot_prices = decode_price_hash(all_prices)
+            for symbol, raw_tick in all_prices.items():
+                last_seen[symbol] = raw_tick
+            if snapshot_prices:
                 snapshot = {
                     "type": "snapshot",
-                    "prices": {},
+                    "prices": snapshot_prices,
                 }
-                for k, v in all_prices.items():
-                    try:
-                        snapshot["prices"][k] = json.loads(v)
-                    except json.JSONDecodeError:
-                        pass
                 yield f"event: snapshot\ndata: {json.dumps(snapshot)}\n\n"
 
             # Stream real-time ticks — non-blocking
             while True:
+                sent_event = False
                 # Run the blocking pubsub call in a thread
                 message = await loop.run_in_executor(
-                    _executor, lambda: pubsub.get_message(timeout=1.0)
+                    _executor, lambda: pubsub.get_message(timeout=0.5)
                 )
                 if message and message["type"] == "message":
-                    tick_data = message["data"]
-                    yield f"event: tick\ndata: {tick_data}\n\n"
-                else:
+                    tick = decode_tick_payload(message["data"])
+                    if tick and tick.get("symbol"):
+                        last_seen[tick["symbol"]] = message["data"]
+                        yield f"event: tick\ndata: {json.dumps(tick)}\n\n"
+                        sent_event = True
+
+                now = loop.time()
+                if now - last_poll >= PRICE_POLL_INTERVAL:
+                    all_prices = await loop.run_in_executor(
+                        _executor, lambda: r.hgetall(PRICE_HASH_KEY)
+                    )
+                    for symbol, raw_tick in all_prices.items():
+                        if raw_tick == last_seen.get(symbol):
+                            continue
+                        tick = decode_tick_payload(raw_tick, fallback_symbol=symbol)
+                        if not tick:
+                            continue
+                        last_seen[symbol] = raw_tick
+                        yield f"event: tick\ndata: {json.dumps(tick)}\n\n"
+                        sent_event = True
+                    last_poll = now
+
+                if not sent_event:
                     # Send keepalive comment to prevent timeout
                     yield ": keepalive\n\n"
                 await asyncio.sleep(0.05)  # Yield control back to event loop
@@ -116,7 +177,7 @@ async def stream_prices():
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
         finally:
             try:
-                pubsub.unsubscribe("hx:ticks")
+                pubsub.unsubscribe(*subscribed_channels)
                 pubsub.close()
             except Exception:
                 pass
@@ -125,7 +186,7 @@ async def stream_prices():
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # Disable nginx buffering
         },
@@ -143,15 +204,19 @@ async def get_tick_history(
     """Get recent tick history for a specific symbol."""
     loop = asyncio.get_event_loop()
     try:
-        raw_ticks = await loop.run_in_executor(
-            _executor, lambda: get_redis().lrange(f"hx:ticks:{symbol}", 0, limit - 1)
-        )
+        history_keys = (f"hx:ticks:{symbol}", f"hx:market:ticker:{symbol}")
+        raw_ticks = []
+        for key in history_keys:
+            raw_ticks = await loop.run_in_executor(
+                _executor, lambda k=key: get_redis().lrange(k, 0, limit - 1)
+            )
+            if raw_ticks:
+                break
         ticks = []
         for t in raw_ticks:
-            try:
-                ticks.append(json.loads(t))
-            except json.JSONDecodeError:
-                pass
+            tick = decode_tick_payload(t, fallback_symbol=symbol)
+            if tick:
+                ticks.append(tick)
         return {"symbol": symbol, "ticks": ticks, "count": len(ticks)}
     except Exception as e:
         logger.error(f"Redis error fetching tick history: {e}")
@@ -197,4 +262,3 @@ def get_live_quote(symbol: str = Query(..., description="Contract symbol e.g. NQ
         }
     except Exception as e:
         return {"symbol": symbol, "error": str(e), "price": None}
-

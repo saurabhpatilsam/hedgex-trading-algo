@@ -67,14 +67,21 @@ cd "${APP}"
 .venv/bin/pip install -r requirements.txt >/tmp/hedgex-pip-install.log
 
 PYTHONPYCACHEPREFIX=/tmp/hedgex-pycache PYTHONPATH=. .venv/bin/python -m py_compile \
-  main.py models.py schemas.py database.py required_api/tradovate_client.py \
-  services/tv_bridge_service.py routers/broker_data.py routers/panel_orders.py \
+  main.py models.py schemas.py database.py engine/market_feed.py required_api/tradovate_client.py \
+  services/redis_config.py services/tv_bridge_service.py services/market_data_service.py \
+  routers/broker_data.py routers/panel_orders.py \
   routers/accounts.py routers/users.py routers/instruments.py routers/strategy.py \
   routers/trading.py routers/market.py
 
 systemctl restart hedgex-api.service
+if systemctl list-unit-files hedgex-md.service --no-legend | grep -q '^hedgex-md.service'; then
+  systemctl restart hedgex-md.service
+fi
 sleep 4
 systemctl is-active hedgex-api.service
+if systemctl list-unit-files hedgex-md.service --no-legend | grep -q '^hedgex-md.service'; then
+  systemctl is-active hedgex-md.service
+fi
 
 curl -fsS http://127.0.0.1:8000/ >/tmp/hedgex-root.json
 curl -fsS http://127.0.0.1:8000/openapi.json >/tmp/hedgex-openapi.json
