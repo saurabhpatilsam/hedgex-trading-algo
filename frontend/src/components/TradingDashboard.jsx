@@ -5,6 +5,8 @@ import { formatMarketPrice, getDisplayPrice, getQuoteNumber } from "../utils/mar
 
 const standardizeSymbol = s => typeof s === 'string' ? s.replace(/[\s-]/g, '').toUpperCase() : '';
 const getInstrumentPrefix = s => standardizeSymbol(s).replace(/[A-Z]\d{1,2}$/i, '');
+const STREAM_STALE_MS = 2500;
+const REDIS_FALLBACK_POLL_MS = 1000;
 
 const formatTickerVolume = value => {
     const number = Number(value);
@@ -227,7 +229,7 @@ export default function TradingDashboard() {
     const fallbackSymbolsRef = useRef(FALLBACK_INSTRUMENTS);
     useEffect(() => {
         const fallback = setInterval(async () => {
-            const streamIsFresh = sseConnected && lastPriceUpdateRef.current && Date.now() - lastPriceUpdateRef.current < 10000;
+            const streamIsFresh = sseConnected && lastPriceUpdateRef.current && Date.now() - lastPriceUpdateRef.current < STREAM_STALE_MS;
             if (streamIsFresh) return;
 
             try {
@@ -253,7 +255,7 @@ export default function TradingDashboard() {
                     }
                 } catch { }
             }
-        }, 5000);
+        }, REDIS_FALLBACK_POLL_MS);
         return () => clearInterval(fallback);
     }, [sseConnected, markPriceUpdate]);
 
