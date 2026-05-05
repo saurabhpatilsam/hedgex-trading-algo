@@ -19,9 +19,7 @@ export default function TradingDashboard() {
     const [livePrices, setLivePrices] = useState({});
     const [mdStatus, setMdStatus] = useState(null);
     const [sseConnected, setSseConnected] = useState(false);
-    const [flashSymbol, setFlashSymbol] = useState(null);
     const eventSourceRef = useRef(null);
-    const flashTimeoutRef = useRef(null);
     const lastPriceUpdateRef = useRef(0);
 
     const refresh = useCallback(async () => {
@@ -144,10 +142,6 @@ export default function TradingDashboard() {
                         [tick.symbol]: tick,
                     }));
                     markPriceUpdate();
-                    // Flash effect
-                    setFlashSymbol(tick.symbol);
-                    if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
-                    flashTimeoutRef.current = setTimeout(() => setFlashSymbol(null), 300);
                 }
             } catch { }
         });
@@ -164,7 +158,6 @@ export default function TradingDashboard() {
         return () => {
             es.close();
             clearInterval(statusInterval);
-            if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
         };
     }, [markPriceUpdate]);
 
@@ -210,6 +203,12 @@ export default function TradingDashboard() {
         const standardize = s => typeof s === 'string' ? s.replace(/[\s-]/g, '').toUpperCase() : '';
         // Heuristic to get the underlying instrument prefix (e.g. "MNQM6" -> "MNQ")
         const getPrefix = s => s.replace(/[A-Z]\d{1,2}$/i, '');
+        const formatPrice = value => Number.isFinite(Number(value))
+            ? Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : '—';
+        const formatSize = value => Number.isFinite(Number(value))
+            ? Number(value).toLocaleString()
+            : '—';
         
         const mdSymbols = mdStatus?.symbols || [];
         const priceSymbols = Object.keys(livePrices);
@@ -243,10 +242,18 @@ export default function TradingDashboard() {
 
         return (
             <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-                gap: '14px',
+                width: '100%',
+                overflowX: 'auto',
+                overflowY: 'hidden',
+                display: 'flex',
+                gap: '12px',
+                padding: '12px',
                 marginBottom: '20px',
+                background: 'rgba(9, 13, 21, 0.92)',
+                border: '1px solid rgba(96, 165, 250, 0.14)',
+                borderRadius: '8px',
+                boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.02)',
+                WebkitOverflowScrolling: 'touch',
             }}>
                 {allSymbols.map(symbol => {
                     const tick = livePrices[symbol];
@@ -254,116 +261,112 @@ export default function TradingDashboard() {
                     const change = tick?.change ?? 0;
                     const isUp = change > 0;
                     const isDown = change < 0;
-                    const isFlashing = flashSymbol === symbol;
 
                     // Status: green = receiving ticks, yellow = connected but no data, red = disconnected
-                    let statusColor, statusGlow, statusLabel;
+                    let statusColor, statusLabel;
                     if (price != null) {
                         statusColor = '#22c55e';
-                        statusGlow = '0 0 8px #22c55e';
                         statusLabel = 'Live';
                     } else if (mdStatus?.state === 'connected') {
                         statusColor = '#facc15';
-                        statusGlow = '0 0 8px #facc15';
                         statusLabel = 'Waiting';
                     } else {
                         statusColor = '#ef4444';
-                        statusGlow = '0 0 8px #ef4444';
                         statusLabel = 'Offline';
                     }
 
                     return (
                         <div key={symbol} style={{
-                            padding: '18px 16px',
-                            background: isFlashing
-                                ? (isUp ? 'rgba(34,197,94,0.12)' : isDown ? 'rgba(239,68,68,0.12)' : 'rgba(59,130,246,0.08)')
-                                : 'linear-gradient(145deg, rgba(17,24,39,0.95) 0%, rgba(30,41,59,0.9) 100%)',
-                            borderRadius: '12px',
-                            border: `1px solid ${isFlashing
-                                ? (isUp ? 'rgba(34,197,94,0.4)' : isDown ? 'rgba(239,68,68,0.4)' : 'rgba(59,130,246,0.2)')
-                                : 'rgba(255,255,255,0.06)'}`,
-                            transition: 'all 0.2s ease',
-                            boxShadow: isFlashing ? '0 0 20px rgba(59,130,246,0.1)' : '0 2px 12px rgba(0,0,0,0.2)',
+                            flex: '0 0 274px',
+                            height: '86px',
+                            display: 'grid',
+                            gridTemplateColumns: '44px minmax(0, 1fr) 76px',
+                            alignItems: 'center',
+                            gap: '12px',
+                            padding: '12px',
+                            background: 'rgba(26, 29, 38, 0.96)',
+                            borderRadius: '8px',
+                            border: '1px solid rgba(255,255,255,0.06)',
+                            boxShadow: '0 6px 18px rgba(0,0,0,0.24)',
                         }}>
-                            {/* Header: Symbol + Status Dot */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                                <span style={{
-                                    fontSize: '15px', fontWeight: '800', color: '#fff',
-                                    letterSpacing: '0.5px',
-                                }}>
-                                    {symbol}
-                                </span>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <span style={{
-                                        width: '9px', height: '9px', borderRadius: '50%',
-                                        background: statusColor, boxShadow: statusGlow,
-                                        display: 'inline-block',
-                                        animation: price != null ? 'pulse 2s ease-in-out infinite' : 'none',
-                                    }} />
-                                    <span style={{
-                                        fontSize: '10px', fontWeight: '600', color: statusColor,
-                                        textTransform: 'uppercase', letterSpacing: '0.5px',
-                                    }}>
-                                        {statusLabel}
-                                    </span>
-                                </div>
-                            </div>
-
-                            {/* Price */}
                             <div style={{
-                                fontSize: '24px', fontWeight: '800', fontFamily: 'monospace',
-                                color: price != null ? (isUp ? '#22c55e' : isDown ? '#ef4444' : '#fff') : 'var(--gray-500)',
-                                lineHeight: '1.2', marginBottom: '8px',
-                                transition: 'color 0.2s',
+                                width: '44px',
+                                height: '44px',
+                                borderRadius: '50%',
+                                display: 'grid',
+                                placeItems: 'center',
+                                background: 'linear-gradient(135deg, #67e8f9 0%, #3b82f6 100%)',
+                                color: '#fff',
+                                fontSize: '18px',
+                                fontWeight: 800,
+                                lineHeight: 1,
+                                boxShadow: '0 0 0 1px rgba(255,255,255,0.08)',
                             }}>
-                                {price != null
-                                    ? price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                                    : '—'}
+                                {standardize(symbol).charAt(0) || '?'}
                             </div>
 
-                            {/* Change Badge */}
-                            {change !== 0 && (
-                                <div style={{ marginBottom: '8px' }}>
+                            <div style={{ minWidth: 0 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
                                     <span style={{
-                                        fontSize: '11px', fontWeight: '700', fontFamily: 'monospace',
-                                        color: isUp ? '#22c55e' : '#ef4444',
-                                        background: isUp ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
-                                        padding: '3px 8px', borderRadius: '6px',
+                                        minWidth: 0,
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                        fontSize: '18px',
+                                        fontWeight: 800,
+                                        color: '#f8fafc',
+                                        letterSpacing: 0,
+                                        lineHeight: 1.15,
                                     }}>
-                                        {isUp ? '▲' : '▼'} {Math.abs(change).toFixed(2)}
+                                        {symbol}
                                     </span>
+                                    <span title={statusLabel} style={{
+                                        flex: '0 0 auto',
+                                        width: '7px',
+                                        height: '7px',
+                                        borderRadius: '50%',
+                                        background: statusColor,
+                                    }} />
                                 </div>
-                            )}
-
-                            {/* Bid/Ask */}
-                            {(tick?.bid || tick?.ask) && (
                                 <div style={{
-                                    display: 'flex', gap: '8px', fontSize: '11px',
-                                    color: 'var(--gray-400)', fontFamily: 'monospace',
+                                    marginTop: '7px',
+                                    fontSize: '19px',
+                                    fontWeight: 800,
+                                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                    fontVariantNumeric: 'tabular-nums',
+                                    color: price != null ? '#f8fafc' : 'var(--gray-500)',
+                                    lineHeight: 1,
+                                    whiteSpace: 'nowrap',
                                 }}>
-                                    {tick.bid && <span>B: {tick.bid.toFixed(2)}</span>}
-                                    {tick.ask && <span>A: {tick.ask.toFixed(2)}</span>}
+                                    {formatPrice(price)}
                                 </div>
-                            )}
+                            </div>
 
-                            {/* Volume */}
-                            {tick?.volume != null && (
+                            <div style={{
+                                minWidth: 0,
+                                display: 'grid',
+                                gap: '5px',
+                                justifyItems: 'end',
+                                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                fontVariantNumeric: 'tabular-nums',
+                            }}>
+                                <div style={{ display: 'flex', gap: '4px', alignItems: 'center', color: 'var(--gray-400)', fontSize: '11px' }}>
+                                    <span>B</span>
+                                    <span style={{ color: '#f8fafc' }}>{formatPrice(tick?.bid)}</span>
+                                </div>
+                                <div style={{ display: 'flex', gap: '4px', alignItems: 'center', color: 'var(--gray-400)', fontSize: '11px' }}>
+                                    <span>A</span>
+                                    <span style={{ color: '#f8fafc' }}>{formatPrice(tick?.ask)}</span>
+                                </div>
                                 <div style={{
-                                    fontSize: '11px', color: 'var(--gray-500)', marginTop: '4px',
-                                    fontFamily: 'monospace',
+                                    color: isUp ? '#22c55e' : isDown ? '#ef4444' : 'var(--gray-500)',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    whiteSpace: 'nowrap',
                                 }}>
-                                    Vol: {tick.volume.toLocaleString()}
+                                    {change !== 0 ? `${isUp ? '↗' : '↘'} ${Math.abs(change).toFixed(2)}` : `Vol ${formatSize(tick?.volume)}`}
                                 </div>
-                            )}
-
-                            {/* No data message */}
-                            {price == null && (
-                                <div style={{ fontSize: '11px', color: 'var(--gray-600)', marginTop: '4px' }}>
-                                    {mdStatus?.state === 'connected'
-                                        ? 'Markets closed'
-                                        : 'Service offline'}
-                                </div>
-                            )}
+                            </div>
                         </div>
                     );
                 })}
