@@ -238,6 +238,14 @@ class MarketDataService:
                 logger.error(f"❌ Authorization failed: status={status_code} data={data}")
                 return
 
+        # Current Tradovate market-data frames arrive as {"e":"md","d":{"quotes":[...]}}.
+        envelope = data.get("d") if data.get("e") == "md" and isinstance(data.get("d"), dict) else None
+        if envelope:
+            for quote in envelope.get("quotes", []):
+                if isinstance(quote, dict):
+                    self._process_quote(quote)
+            return
+
         # Quote data — has 'entries' with Trade, Bid, Ask etc.
         if "entries" in data:
             self._process_quote(data)
@@ -266,19 +274,23 @@ class MarketDataService:
         if "Bid" in entries:
             tick["bid"] = entries["Bid"].get("price")
             tick["bid_size"] = entries["Bid"].get("size")
-        if "Ask" in entries:
-            tick["ask"] = entries["Ask"].get("price")
-            tick["ask_size"] = entries["Ask"].get("size")
+        ask_entry = entries.get("Ask") or entries.get("Offer")
+        if ask_entry:
+            tick["ask"] = ask_entry.get("price")
+            tick["ask_size"] = ask_entry.get("size")
         if "TotalTradeVolume" in entries:
             tick["volume"] = entries["TotalTradeVolume"].get("size")
         if "OpenInterest" in entries:
             tick["open_interest"] = entries["OpenInterest"].get("size")
-        if "High" in entries:
-            tick["high"] = entries["High"].get("price")
-        if "Low" in entries:
-            tick["low"] = entries["Low"].get("price")
-        if "Open" in entries:
-            tick["open"] = entries["Open"].get("price")
+        high_entry = entries.get("High") or entries.get("HighPrice")
+        if high_entry:
+            tick["high"] = high_entry.get("price")
+        low_entry = entries.get("Low") or entries.get("LowPrice")
+        if low_entry:
+            tick["low"] = low_entry.get("price")
+        open_entry = entries.get("Open") or entries.get("OpeningPrice")
+        if open_entry:
+            tick["open"] = open_entry.get("price")
 
         # Find which symbol this is for
         symbol = self._contract_map.get(contract_id)
