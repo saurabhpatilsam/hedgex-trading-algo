@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -32,17 +33,22 @@ async def lifespan(app: FastAPI):
     from engine.runner import start_runner, stop_runner
     await start_runner()
     
-    # Start continuous WebSocket market data feed
-    from engine.market_feed import MarketFeedManager
-    feed_manager = MarketFeedManager()
-    await feed_manager.start()
+    feed_manager = None
+    if os.getenv("ENABLE_EMBEDDED_MARKET_FEED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        # Optional fallback for single-process deployments; production uses hedgex-md.
+        from engine.market_feed import MarketFeedManager
+        feed_manager = MarketFeedManager()
+        await feed_manager.start()
+    else:
+        logger.info("Embedded market feed disabled; using external hedgex-md service")
     
     logger.info("🚀 Trading system initialized")
 
     yield
 
     # Shutdown
-    feed_manager._running = False
+    if feed_manager is not None:
+        feed_manager._running = False
     await stop_runner()
     logger.info("Trading system shutdown complete")
 
