@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { tradingApi, marketApi } from "../api";
 import TradingPanel from "./TradingPanel";
+import { formatMarketPrice, getDisplayPrice, getQuoteNumber } from "../utils/marketPrice";
 
 export default function TradingDashboard() {
     const [strategies, setStrategies] = useState([]);
@@ -203,9 +204,6 @@ export default function TradingDashboard() {
         const standardize = s => typeof s === 'string' ? s.replace(/[\s-]/g, '').toUpperCase() : '';
         // Heuristic to get the underlying instrument prefix (e.g. "MNQM6" -> "MNQ")
         const getPrefix = s => s.replace(/[A-Z]\d{1,2}$/i, '');
-        const formatPrice = value => Number.isFinite(Number(value))
-            ? Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-            : '—';
         const formatSize = value => Number.isFinite(Number(value))
             ? Number(value).toLocaleString()
             : '—';
@@ -241,23 +239,12 @@ export default function TradingDashboard() {
         let allSymbols = finalSymbols.length > 0 ? finalSymbols.sort() : [...FALLBACK_INSTRUMENTS].sort();
 
         return (
-            <div style={{
-                width: '100%',
-                overflowX: 'auto',
-                overflowY: 'hidden',
-                display: 'flex',
-                gap: '12px',
-                padding: '12px',
-                marginBottom: '20px',
-                background: 'rgba(9, 13, 21, 0.92)',
-                border: '1px solid rgba(96, 165, 250, 0.14)',
-                borderRadius: '8px',
-                boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.02)',
-                WebkitOverflowScrolling: 'touch',
-            }}>
+            <div className="market-ticker-strip">
                 {allSymbols.map(symbol => {
                     const tick = livePrices[symbol];
-                    const price = tick?.price ?? tick?.bid ?? null;
+                    const price = getDisplayPrice(tick);
+                    const bid = getQuoteNumber(tick?.bid);
+                    const ask = getQuoteNumber(tick?.ask);
                     const change = tick?.change ?? 0;
                     const isUp = change > 0;
                     const isDown = change < 0;
@@ -276,94 +263,31 @@ export default function TradingDashboard() {
                     }
 
                     return (
-                        <div key={symbol} style={{
-                            flex: '0 0 274px',
-                            height: '86px',
-                            display: 'grid',
-                            gridTemplateColumns: '44px minmax(0, 1fr) 76px',
-                            alignItems: 'center',
-                            gap: '12px',
-                            padding: '12px',
-                            background: 'rgba(26, 29, 38, 0.96)',
-                            borderRadius: '8px',
-                            border: '1px solid rgba(255,255,255,0.06)',
-                            boxShadow: '0 6px 18px rgba(0,0,0,0.24)',
-                        }}>
-                            <div style={{
-                                width: '44px',
-                                height: '44px',
-                                borderRadius: '50%',
-                                display: 'grid',
-                                placeItems: 'center',
-                                background: 'linear-gradient(135deg, #67e8f9 0%, #3b82f6 100%)',
-                                color: '#fff',
-                                fontSize: '18px',
-                                fontWeight: 800,
-                                lineHeight: 1,
-                                boxShadow: '0 0 0 1px rgba(255,255,255,0.08)',
-                            }}>
+                        <div key={symbol} className="market-ticker-card">
+                            <div className="market-ticker-avatar">
                                 {standardize(symbol).charAt(0) || '?'}
                             </div>
 
-                            <div style={{ minWidth: 0 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                                    <span style={{
-                                        minWidth: 0,
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
-                                        whiteSpace: 'nowrap',
-                                        fontSize: '18px',
-                                        fontWeight: 800,
-                                        color: '#f8fafc',
-                                        letterSpacing: 0,
-                                        lineHeight: 1.15,
-                                    }}>
-                                        {symbol}
-                                    </span>
-                                    <span title={statusLabel} style={{
-                                        flex: '0 0 auto',
-                                        width: '7px',
-                                        height: '7px',
-                                        borderRadius: '50%',
-                                        background: statusColor,
-                                    }} />
+                            <div className="market-ticker-main">
+                                <div className="market-ticker-title-row">
+                                    <span className="market-ticker-symbol">{symbol}</span>
+                                    <span className="market-ticker-status" title={statusLabel} style={{ background: statusColor }} />
                                 </div>
-                                <div style={{
-                                    marginTop: '7px',
-                                    fontSize: '19px',
-                                    fontWeight: 800,
-                                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                                    fontVariantNumeric: 'tabular-nums',
-                                    color: price != null ? '#f8fafc' : 'var(--gray-500)',
-                                    lineHeight: 1,
-                                    whiteSpace: 'nowrap',
-                                }}>
-                                    {formatPrice(price)}
+                                <div className="market-ticker-price">
+                                    {formatMarketPrice(price)}
                                 </div>
                             </div>
 
-                            <div style={{
-                                minWidth: 0,
-                                display: 'grid',
-                                gap: '5px',
-                                justifyItems: 'end',
-                                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                                fontVariantNumeric: 'tabular-nums',
-                            }}>
-                                <div style={{ display: 'flex', gap: '4px', alignItems: 'center', color: 'var(--gray-400)', fontSize: '11px' }}>
+                            <div className="market-ticker-side">
+                                <div className="market-ticker-quote-row">
                                     <span>B</span>
-                                    <span style={{ color: '#f8fafc' }}>{formatPrice(tick?.bid)}</span>
+                                    <span>{formatMarketPrice(bid)}</span>
                                 </div>
-                                <div style={{ display: 'flex', gap: '4px', alignItems: 'center', color: 'var(--gray-400)', fontSize: '11px' }}>
+                                <div className="market-ticker-quote-row">
                                     <span>A</span>
-                                    <span style={{ color: '#f8fafc' }}>{formatPrice(tick?.ask)}</span>
+                                    <span>{formatMarketPrice(ask)}</span>
                                 </div>
-                                <div style={{
-                                    color: isUp ? '#22c55e' : isDown ? '#ef4444' : 'var(--gray-500)',
-                                    fontSize: '11px',
-                                    fontWeight: 700,
-                                    whiteSpace: 'nowrap',
-                                }}>
+                                <div className={`market-ticker-meta ${isUp ? 'up' : isDown ? 'down' : ''}`}>
                                     {change !== 0 ? `${isUp ? '↗' : '↘'} ${Math.abs(change).toFixed(2)}` : `Vol ${formatSize(tick?.volume)}`}
                                 </div>
                             </div>

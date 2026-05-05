@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { panelApi, groupsApi, instrumentsApi, accountsApi, usersApi, marketApi } from "../api";
+import { getDisplayPrice, getQuoteNumber } from "../utils/marketPrice";
 
 /**
  * TradingPanel V2 — Professional order placement panel (NinjaTrader-inspired).
@@ -67,14 +68,15 @@ export default function TradingPanel({ livePrices = {} }) {
     const totalContracts = accountCount * quantity;
 
     const contractSymbol = selectedInstrument?.contract_month || selectedInstrument?.symbol || "";
+    const liveTick = livePrices[contractSymbol];
 
-    // ── Direct price polling fallback ────────────────────
+    // ── Redis price polling fallback ─────────────────────
     const [fallbackPrice, setFallbackPrice] = useState(null);
     const fallbackRef = useRef(null);
 
     useEffect(() => {
-        // If SSE provides no data for this symbol, poll Tradovate directly
-        const sseHasData = livePrices[contractSymbol]?.price != null;
+        // If SSE provides no data for this symbol, poll the Redis-backed quote endpoint.
+        const sseHasData = getDisplayPrice(liveTick) != null;
         if (sseHasData || !contractSymbol) {
             // SSE is working, clear any fallback interval
             if (fallbackRef.current) {
@@ -101,12 +103,12 @@ export default function TradingPanel({ livePrices = {} }) {
                 fallbackRef.current = null;
             }
         };
-    }, [contractSymbol, livePrices[contractSymbol]?.price]);
+    }, [contractSymbol, liveTick]);
 
-    const liveData = livePrices[contractSymbol] || (fallbackPrice?.symbol === contractSymbol ? fallbackPrice : {});
-    const currentPrice = liveData.price || null;
-    const bid = liveData.bid || currentPrice;
-    const ask = liveData.ask || currentPrice;
+    const liveData = liveTick || (fallbackPrice?.symbol === contractSymbol ? fallbackPrice : {});
+    const currentPrice = getDisplayPrice(liveData);
+    const bid = getQuoteNumber(liveData.bid) ?? currentPrice;
+    const ask = getQuoteNumber(liveData.ask) ?? currentPrice;
     const change = liveData.change || 0;
 
     // Group accounts by user for account dropdown
