@@ -30,9 +30,14 @@ from database import SessionLocal
 from models import Instrument, BrokerCredential, User
 from required_api.tradovate_client import get_proxied_client
 from services.redis_config import build_redis_client, redis_connection_info
+from services.tradovate_md_auth import (
+    build_ws_authorize_message,
+    get_tradovate_md_ws_url,
+    get_tradovate_rest_base_url,
+    renew_market_data_token,
+)
 
 # ── Config ────────────────────────────────────────────────
-WS_URL = "wss://md.tradovateapi.com/v1/websocket"
 HEARTBEAT_INTERVAL = 30  # seconds
 RECONNECT_DELAY = 5      # seconds
 TICK_HISTORY_MAX = 1000   # max ticks per symbol in Redis list
@@ -54,6 +59,7 @@ class MarketDataService:
             socket_connect_timeout=10,
         )
         self.access_token = None
+        self.md_access_token = None
         self.ws = None
         self.symbols = []
         self.running = True
@@ -98,9 +104,11 @@ class MarketDataService:
         token, err = client.login(cred.login_id, cred.password)
         if not token:
             raise RuntimeError(f"Tradovate login failed: {err}")
-        self.access_token = token
-        logger.info(f"Logged in to Tradovate via user {user.name}")
-        return token
+        tokens = renew_market_data_token(token)
+        self.access_token = tokens["access_token"]
+        self.md_access_token = tokens["md_access_token"]
+        logger.info(f"Logged in to Tradovate via user {user.name}; market-data token renewed")
+        return self.access_token
 
     def _next_id(self):
         self.request_id += 1
@@ -133,7 +141,7 @@ class MarketDataService:
             # SockJS: open frame — NOW send authorization
             if raw == "o":
                 logger.info("SockJS session opened, sending authorization...")
-                auth_msg = f"authorize\n{self._next_id()}\n\n{self.access_token}"
+                auth_msg = build_ws_authorize_message(self._next_id(), self.md_access_token)
                 ws.send(auth_msg)
                 return
 
@@ -362,7 +370,7 @@ class MarketDataService:
         """Look up contract ID for symbol and cache the mapping."""
         import urllib.request
         try:
-            find_url = f"https://demo.tradovateapi.com/v1/contract/find?name={symbol}"
+            find_url = f"{get_tradovate_rest_base_url()}/contract/find?name={symbol}"
             req = urllib.request.Request(find_url, headers={
                 "Authorization": f"Bearer {self.access_token}",
                 "Accept": "application/json",
@@ -430,9 +438,10 @@ class MarketDataService:
                 self._login()
                 self.authorized = False
 
-                logger.info(f"Connecting to {WS_URL}...")
+                ws_url = get_tradovate_md_ws_url()
+                logger.info(f"Connecting to {ws_url}...")
                 self.ws = websocket.WebSocketApp(
-                    WS_URL,
+                    ws_url,
                     on_open=self._on_open,
                     on_message=self._on_message,
                     on_error=self._on_error,

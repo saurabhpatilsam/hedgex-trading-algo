@@ -19,6 +19,13 @@ from collections import defaultdict
 
 from redis import Redis
 
+from services.tradovate_md_auth import (
+    build_ws_authorize_message,
+    get_tradovate_md_ws_url,
+    get_tradovate_rest_base_url,
+    renew_market_data_token,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -99,8 +106,8 @@ class MarketFeedManager:
         if time.time() - self._last_config_refresh >= interval:
             self._load_config_from_db()
 
-    def _get_token(self) -> str:
-        """Get a valid Tradovate token using the global Redis cache.
+    def _get_tokens(self) -> dict:
+        """Get valid Tradovate REST + market-data tokens using the global Redis cache.
         
         This avoids redundant logins:
           1. Check Redis for a cached token (shared across all workers)
@@ -114,7 +121,14 @@ class MarketFeedManager:
                 data = json.loads(cached)
                 # Check expiry
                 if data.get("expires_at", 0) > time.time():
-                    return data["token"]
+                    if data.get("access_token") and data.get("md_access_token"):
+                        return data
+                    if data.get("token"):
+                        tokens = renew_market_data_token(data["token"])
+                        tokens["expires_at"] = time.time() + 1500
+                        tokens["login_id"] = data.get("login_id", "cached")
+                        self._redis.setex("hx:tradovate:feed_token", 1500, json.dumps(tokens))
+                        return tokens
             except Exception:
                 pass
 
@@ -141,16 +155,23 @@ class MarketFeedManager:
                 logger.error(f"[MarketFeed] Login failed: {err}")
             return None
 
-        # 4. Cache token in Redis for 25 minutes (shared across all workers)
+        try:
+            tokens = renew_market_data_token(token)
+        except Exception as e:
+            logger.error(f"[MarketFeed] Failed to renew MD token: {e}")
+            return None
+
+        # 4. Cache tokens in Redis for 25 minutes (shared across all workers)
         token_data = json.dumps({
-            "token": token,
+            "access_token": tokens["access_token"],
+            "md_access_token": tokens["md_access_token"],
             "expires_at": time.time() + 1500,  # 25 minutes
             "login_id": self._cached_login[:8] + "***",
         })
         self._redis.setex("hx:tradovate:feed_token", 1500, token_data)
-        logger.info("[MarketFeed] Fresh token cached in Redis (25m TTL)")
+        logger.info("[MarketFeed] Fresh REST/MD tokens cached in Redis (25m TTL)")
 
-        return token
+        return tokens
 
     async def _pump_loop(self):
         """Main loop with auto-reconnect: connect, authorize, subscribe, read frames."""
@@ -176,8 +197,8 @@ class MarketFeedManager:
                 retry_delay = min(retry_delay * 2, max_delay)
                 continue
 
-            token = self._get_token()
-            if not token:
+            tokens = self._get_tokens()
+            if not tokens:
                 self._update_status("reconnecting")
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, max_delay)
@@ -186,7 +207,12 @@ class MarketFeedManager:
             logger.info("[MarketFeed] Spawning WebSocket pump thread...")
             loop = asyncio.get_event_loop()
             try:
-                await loop.run_in_executor(None, self._sync_ws_pump, token)
+                await loop.run_in_executor(
+                    None,
+                    self._sync_ws_pump,
+                    tokens["access_token"],
+                    tokens["md_access_token"],
+                )
             except Exception as e:
                 logger.error(f"[MarketFeed] Pump thread error: {e}")
 
@@ -216,7 +242,7 @@ class MarketFeedManager:
             status.update(extra)
         self._redis.set("hx:md:status", json.dumps(status))
 
-    def _sync_ws_pump(self, token: str):
+    def _sync_ws_pump(self, access_token: str, md_access_token: str):
         """Synchronous blocking pump using websocket-client."""
         import websocket
         import requests
@@ -225,8 +251,8 @@ class MarketFeedManager:
         self.contract_map = {}
         for sym in self.active_symbols:
             try:
-                url = f"https://demo.tradovateapi.com/v1/contract/find?name={sym}"
-                res = requests.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+                url = f"{get_tradovate_rest_base_url()}/contract/find?name={sym}"
+                res = requests.get(url, headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"})
                 if res.status_code == 200:
                     c_id = res.json().get("id")
                     if c_id:
@@ -241,7 +267,7 @@ class MarketFeedManager:
             logger.error("[MarketFeed] No valid contracts resolved. Check instrument symbols.")
             return
 
-        ws_url = "wss://md.tradovateapi.com/v1/websocket"
+        ws_url = get_tradovate_md_ws_url()
         logger.info(f"[MarketFeed] Connecting to: {ws_url}")
 
         try:
@@ -251,15 +277,28 @@ class MarketFeedManager:
             return
 
         # 1. Authorize MD
-        auth_msg = f"authorize\n1\n\n{token}"
+        auth_msg = build_ws_authorize_message(1, md_access_token)
         ws.send(auth_msg)
+        authorized = False
+        last_frame = ""
         try:
             for _ in range(5):
                 frame = ws.recv()
-                if "a[{\"s\":200" in frame:
+                last_frame = frame
+                if (
+                    '"s":200' in frame
+                    or '"s": 200' in frame
+                    or '\\"s\\":200' in frame
+                    or '\\"s\\": 200' in frame
+                ):
+                    authorized = True
                     break
         except Exception as e:
             logger.error(f"[MarketFeed] MD Auth timeout/error: {e}")
+            ws.close()
+            return
+        if not authorized:
+            logger.error(f"[MarketFeed] MD authorization failed; last frame={last_frame[:300]!r}")
             ws.close()
             return
 

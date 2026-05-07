@@ -9,7 +9,14 @@ import {
   marketDataApi,
   panelApi,
 } from "../../api";
-import { formatMarketPrice, getDisplayPrice, getQuoteNumber, getTickSize, normalizeToTick } from "../../utils/marketPrice";
+import {
+  formatMarketPrice,
+  getDisplayPrice,
+  getPriceSnapshotSignature,
+  getQuoteNumber,
+  getTickSize,
+  normalizeToTick,
+} from "../../utils/marketPrice";
 import {
   DEFAULT_WATCHLIST,
   TIMEFRAMES,
@@ -17,6 +24,7 @@ import {
   calculateBracketPriceFromPoints,
   getGroupAccountIds,
   getInstrumentDisplaySymbol,
+  isPriceStreamFresh,
   mergeLiveCandle,
   normalizeOrderType,
   normalizeStreamTick,
@@ -41,6 +49,8 @@ const TOOLBAR_TOOLS = [
 
 const ORDER_TYPES = ["Market", "Limit", "Stop", "Stop Limit"];
 const TERMINAL_TABS = ["Positions", "Orders", "Executions", "Account"];
+const REDIS_FALLBACK_POLL_MS = 1000;
+const STREAM_STALE_MS = 2500;
 const PRICE_TARGETS = {
   limitPrice: "Limit",
   stopPrice: "Stop",
@@ -86,6 +96,8 @@ export default function TradingViewWorkspace() {
   const seriesRef = useRef(null);
   const streamRef = useRef(null);
   const candlesRef = useRef([]);
+  const lastPriceUpdateRef = useRef(0);
+  const priceSnapshotSignatureRef = useRef("");
 
   const [activeTool, setActiveTool] = useState("cursor");
   const [activeSymbol, setActiveSymbol] = useState(DEFAULT_WATCHLIST[0].symbol);
@@ -93,6 +105,7 @@ export default function TradingViewWorkspace() {
   const [prices, setPrices] = useState({});
   const [candles, setCandles] = useState([]);
   const [chartStatus, setChartStatus] = useState("Loading chart data");
+  const [streamConnected, setStreamConnected] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
 
   const [instruments, setInstruments] = useState([]);
@@ -318,7 +331,12 @@ export default function TradingViewWorkspace() {
     const tick = normalizeStreamTick(rawTick);
     if (!tick?.symbol) return;
 
-    setPrices((prev) => ({ ...prev, [tick.symbol]: tick }));
+    setPrices((prev) => {
+      const next = { ...prev, [tick.symbol]: { ...(prev[tick.symbol] || {}), ...tick } };
+      priceSnapshotSignatureRef.current = getPriceSnapshotSignature(next);
+      return next;
+    });
+    lastPriceUpdateRef.current = Date.now();
     if (tick.symbol !== activeSymbol) return;
 
     candlesRef.current = mergeLiveCandle(candlesRef.current, tick, {
@@ -332,30 +350,100 @@ export default function TradingViewWorkspace() {
     setChartStatus("Redis stream active");
   }, [activeSymbol, activeTimeframe, activeTickSize]);
 
-  useEffect(() => {
-    const es = new EventSource(marketApi.streamUrl());
-    streamRef.current = es;
+  const applyPriceSnapshot = useCallback((nextPrices, liveStatus) => {
+    const signature = getPriceSnapshotSignature(nextPrices);
+    if (!signature) return false;
 
-    es.addEventListener("snapshot", (event) => {
+    setPrices(nextPrices);
+    if (signature !== priceSnapshotSignatureRef.current) {
+      priceSnapshotSignatureRef.current = signature;
+      lastPriceUpdateRef.current = Date.now();
+      setChartStatus(liveStatus);
+      return true;
+    }
+
+    setChartStatus("Redis snapshot stale; waiting for ticks");
+    return false;
+  }, []);
+
+  useEffect(() => {
+    const ws = new WebSocket(marketApi.wsUrl());
+    streamRef.current = ws;
+
+    ws.onopen = () => {
+      setStreamConnected(true);
+      setChartStatus("Redis Pub/Sub websocket active");
+    };
+
+    ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.prices) setPrices(data.prices);
+        if (data.type === "snapshot" && data.prices) {
+          applyPriceSnapshot(data.prices, "Redis snapshot loaded");
+          return;
+        }
+        if (data.type === "error") {
+          setChartStatus(data.error ? `Redis stream error: ${data.error}` : "Redis stream error");
+          return;
+        }
+        const tick = data.type === "price_update"
+          ? { ...(data.data || {}), symbol: data.symbol }
+          : data.tick || data;
+        applyLiveTick(tick);
       } catch {
         /* ignore malformed stream frames */
       }
-    });
+    };
 
-    es.addEventListener("tick", (event) => {
+    ws.onerror = () => {
+      setStreamConnected(false);
+      setChartStatus("Redis stream reconnecting");
+    };
+    ws.onclose = () => {
+      setStreamConnected(false);
+      setChartStatus("Redis stream reconnecting");
+    };
+    return () => {
+      ws.close();
+      setStreamConnected(false);
+    };
+  }, [applyLiveTick, applyPriceSnapshot]);
+
+  useEffect(() => {
+    const id = setInterval(async () => {
+      if (isPriceStreamFresh({
+        connected: streamConnected,
+        lastUpdateMs: lastPriceUpdateRef.current,
+        staleMs: STREAM_STALE_MS,
+      })) {
+        return;
+      }
+
       try {
-        applyLiveTick(JSON.parse(event.data));
-      } catch {
-        /* ignore malformed stream frames */
-      }
-    });
+        const data = await marketApi.prices();
+        if (data?.prices && Object.keys(data.prices).length) {
+          applyPriceSnapshot(
+            data.prices,
+            streamConnected ? "Redis snapshot fallback active" : "Redis snapshot polling"
+          );
+          return;
+        }
 
-    es.onerror = () => setChartStatus("Redis stream reconnecting");
-    return () => es.close();
-  }, [applyLiveTick]);
+        await Promise.all(watchlist.map(async (item) => {
+          const quote = await marketApi.liveQuote(item.symbol).catch(() => null);
+          if (!quote || getDisplayPrice(quote, item.symbol) == null) return;
+          const symbol = quote.symbol || item.symbol;
+          setPrices((prev) => ({ ...prev, [symbol]: { ...(prev[symbol] || {}), ...quote } }));
+          lastPriceUpdateRef.current = Date.now();
+          setChartStatus("Redis quote fallback active");
+        }));
+      } catch {
+        setChartStatus("Waiting for Redis Pub/Sub prices");
+      }
+    }, REDIS_FALLBACK_POLL_MS);
+
+    return () => clearInterval(id);
+  }, [applyPriceSnapshot, streamConnected, watchlist]);
 
   const getTicketEntryPrice = useCallback(() => {
     const normalizedType = normalizeOrderType(orderType);

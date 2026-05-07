@@ -1,7 +1,7 @@
 import { memo, useState, useEffect, useCallback, useRef } from "react";
 import { tradingApi, marketApi } from "../api";
 import TradingPanel from "./TradingPanel";
-import { formatMarketPrice, getDisplayPrice, getQuoteNumber } from "../utils/marketPrice";
+import { formatMarketPrice, getDisplayPrice, getPriceSnapshotSignature, getQuoteNumber } from "../utils/marketPrice";
 
 const standardizeSymbol = s => typeof s === 'string' ? s.replace(/[\s-]/g, '').toUpperCase() : '';
 const getInstrumentPrefix = s => standardizeSymbol(s).replace(/[A-Z]\d{1,2}$/i, '');
@@ -82,6 +82,7 @@ export default function TradingDashboard() {
     const [sseConnected, setSseConnected] = useState(false);
     const eventSourceRef = useRef(null);
     const lastPriceUpdateRef = useRef(0);
+    const priceSnapshotSignatureRef = useRef("");
 
     const refresh = useCallback(async () => {
         setLoading(true);
@@ -171,43 +172,59 @@ export default function TradingDashboard() {
         lastPriceUpdateRef.current = Date.now();
     }, []);
 
-    // ── Live Price SSE Connection ────────────────────────
+    const applyPriceSnapshot = useCallback((nextPrices) => {
+        const signature = getPriceSnapshotSignature(nextPrices);
+        if (!signature) return false;
+
+        setLivePrices(nextPrices);
+        if (signature !== priceSnapshotSignatureRef.current) {
+            priceSnapshotSignatureRef.current = signature;
+            markPriceUpdate();
+            return true;
+        }
+        return false;
+    }, [markPriceUpdate]);
+
+    // ── Live Price WebSocket Connection ──────────────────
     useEffect(() => {
         // Check MD service status
         marketApi.status().then(setMdStatus).catch(() => { });
 
-        const streamUrl = marketApi.streamUrl();
-        const es = new EventSource(streamUrl);
-        eventSourceRef.current = es;
+        const ws = new WebSocket(marketApi.wsUrl());
+        eventSourceRef.current = ws;
 
-        es.onopen = () => {
+        ws.onopen = () => {
             setSseConnected(true);
         };
 
-        es.addEventListener("snapshot", (e) => {
+        ws.onmessage = (event) => {
             try {
-                const data = JSON.parse(e.data);
-                if (data.prices) {
-                    setLivePrices(data.prices);
-                    if (Object.keys(data.prices).length > 0) markPriceUpdate();
+                const data = JSON.parse(event.data);
+                if (data.type === "snapshot" && data.prices) {
+                    applyPriceSnapshot(data.prices);
+                    return;
                 }
-            } catch { }
-        });
-
-        es.addEventListener("tick", (e) => {
-            try {
-                const tick = JSON.parse(e.data);
+                const tick = data.type === "price_update"
+                    ? { ...(data.data || {}), symbol: data.symbol }
+                    : data.tick || data;
                 if (tick.symbol) {
-                    setLivePrices(prev => ({
-                        ...prev,
-                        [tick.symbol]: tick,
-                    }));
+                    setLivePrices((prev) => {
+                        const next = {
+                            ...prev,
+                            [tick.symbol]: { ...(prev[tick.symbol] || {}), ...tick },
+                        };
+                        priceSnapshotSignatureRef.current = getPriceSnapshotSignature(next);
+                        return next;
+                    });
                     markPriceUpdate();
                 }
             } catch { }
-        });
+        };
 
-        es.onerror = () => {
+        ws.onerror = () => {
+            setSseConnected(false);
+        };
+        ws.onclose = () => {
             setSseConnected(false);
         };
 
@@ -217,10 +234,10 @@ export default function TradingDashboard() {
         }, 30000);
 
         return () => {
-            es.close();
+            ws.close();
             clearInterval(statusInterval);
         };
-    }, [markPriceUpdate]);
+    }, [applyPriceSnapshot]);
 
     // ── Instrument Cards Component ──────────────────────
     const FALLBACK_INSTRUMENTS = ['ESM6', 'GCM6', 'MESM6', 'MGCM6', 'MNQM6', 'NQM6'];
@@ -235,8 +252,7 @@ export default function TradingDashboard() {
             try {
                 const data = await marketApi.prices();
                 if (data.prices && Object.keys(data.prices).length > 0) {
-                    setLivePrices(data.prices);
-                    markPriceUpdate();
+                    applyPriceSnapshot(data.prices);
                     return; // Redis pipeline is working
                 }
             } catch { }
@@ -247,9 +263,10 @@ export default function TradingDashboard() {
                 try {
                     const quote = await marketApi.liveQuote(sym);
                     if (getDisplayPrice(quote, sym) != null) {
+                        const symbol = quote.symbol || sym;
                         setLivePrices(prev => ({
                             ...prev,
-                            [quote.symbol || sym]: quote,
+                            [symbol]: { ...(prev[symbol] || {}), ...quote },
                         }));
                         markPriceUpdate();
                     }
@@ -257,7 +274,7 @@ export default function TradingDashboard() {
             }
         }, REDIS_FALLBACK_POLL_MS);
         return () => clearInterval(fallback);
-    }, [sseConnected, markPriceUpdate]);
+    }, [applyPriceSnapshot, sseConnected, markPriceUpdate]);
 
     const InstrumentCards = () => {
         const mdSymbols = mdStatus?.symbols || [];

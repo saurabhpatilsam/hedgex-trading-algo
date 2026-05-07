@@ -22,6 +22,10 @@ const TICK_CHANNELS = (process.env.REDIS_TICK_CHANNELS || 'hx:ticks')
   .map(channel => channel.trim())
   .filter(Boolean);
 const LEGACY_PRICE_PATTERN = process.env.REDIS_PRICE_PATTERN || 'price:*';
+const PRICE_PATTERNS = (process.env.REDIS_PRICE_PATTERNS || `TRADOVATE_*_PRICE,${LEGACY_PRICE_PATTERN}`)
+  .split(',')
+  .map(pattern => pattern.trim())
+  .filter(Boolean);
 
 // Setup Redis client for subscription
 const redisSubscriber = new Redis({
@@ -49,11 +53,11 @@ redisSubscriber.on('connect', () => {
       console.log(`Subscribed to ${count} channel(s): ${TICK_CHANNELS.join(', ')}`);
     }
   });
-  redisSubscriber.psubscribe(LEGACY_PRICE_PATTERN, (err, count) => {
+  redisSubscriber.psubscribe(...PRICE_PATTERNS, (err, count) => {
     if (err) {
       console.error('Failed to subscribe to Redis price pattern:', err);
     } else {
-      console.log(`Subscribed to ${count} pattern(s): ${LEGACY_PRICE_PATTERN}`);
+      console.log(`Subscribed to ${count} pattern(s): ${PRICE_PATTERNS.join(', ')}`);
     }
   });
 });
@@ -81,6 +85,35 @@ function parsePricePayload(message) {
   return parsedData;
 }
 
+function getSymbolFromChannel(channel) {
+  if (!channel) return null;
+  const upper = channel.toUpperCase();
+  if (upper.startsWith('TRADOVATE_') && upper.endsWith('_PRICE')) {
+    return channel.slice('TRADOVATE_'.length, -'_PRICE'.length);
+  }
+  if (channel.includes(':')) return channel.split(':').pop();
+  return null;
+}
+
+function normalizePriceData(data, symbol, channel) {
+  const price = data.price ?? data.last ?? data.last_price ?? data.lp ?? data.LAST;
+  const bid = data.bid ?? data.BID;
+  const ask = data.ask ?? data.ASK ?? data.offer ?? data.OFFER;
+  const volume = data.volume ?? data.VOLUME ?? data.totalVolume ?? data.TOTAL_VOLUME;
+  const timestamp = data.timestamp ?? data.ts ?? data.time ?? data.TIMESTAMP ?? data.UK_TIMESTAMP ?? data.date;
+  return {
+    ...data,
+    symbol: data.symbol || data.contract_month || data.n || data.INSTRUMENT || symbol,
+    price,
+    last: price,
+    bid,
+    ask,
+    volume,
+    timestamp,
+    channel,
+  };
+}
+
 function publishPrice(symbol, parsedData) {
   if (!symbol) return;
 
@@ -104,15 +137,15 @@ function publishPrice(symbol, parsedData) {
 // Handle hx:ticks channel published by backend market data services
 redisSubscriber.on('message', (channel, message) => {
   const parsedData = parsePricePayload(message);
-  const symbol = parsedData.symbol || parsedData.contract_month || parsedData.n;
-  publishPrice(symbol, parsedData);
+  const symbol = parsedData.symbol || parsedData.contract_month || parsedData.n || parsedData.INSTRUMENT || getSymbolFromChannel(channel);
+  publishPrice(symbol, normalizePriceData(parsedData, symbol, channel));
 });
 
-// Backward compatibility for older channels like price:MNQ
+// Redis Pub/Sub price channels such as TRADOVATE_ESM6_PRICE and older price:MNQ
 redisSubscriber.on('pmessage', (pattern, channel, message) => {
   const parsedData = parsePricePayload(message);
-  const symbol = parsedData.symbol || parsedData.contract_month || channel.split(':').pop();
-  publishPrice(symbol, parsedData);
+  const symbol = parsedData.symbol || parsedData.contract_month || parsedData.n || parsedData.INSTRUMENT || getSymbolFromChannel(channel);
+  publishPrice(symbol, normalizePriceData(parsedData, symbol, channel));
 });
 
 // WebSocket Server Event Handlers

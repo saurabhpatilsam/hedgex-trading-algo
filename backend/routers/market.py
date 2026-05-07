@@ -4,6 +4,7 @@ Live Market Data Router — Real-time price streaming via SSE.
 Endpoints:
   GET  /api/market/prices            — Snapshot of all latest prices from Redis
   GET  /api/market/stream            — SSE stream of real-time tick data
+  WS   /api/market/ws                — WebSocket stream backed by Redis Pub/Sub
   GET  /api/market/ticks/{symbol}    — Recent tick history for a symbol
   GET  /api/market/status            — Market data service health
 """
@@ -14,7 +15,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from services.redis_config import build_redis_client, redis_connection_info
 
@@ -26,6 +27,14 @@ PRICE_HASH_KEY = os.environ.get("REDIS_PRICE_HASH_KEY", "hx:prices")
 TICK_CHANNELS = tuple(
     ch.strip() for ch in os.environ.get("REDIS_TICK_CHANNELS", "hx:ticks").split(",") if ch.strip()
 )
+TICK_CHANNEL_PATTERNS = tuple(
+    ch.strip()
+    for ch in os.environ.get(
+        "REDIS_TICK_CHANNEL_PATTERNS",
+        "TRADOVATE_*_PRICE,price:*,hx:market:ticker:*",
+    ).split(",")
+    if ch.strip()
+)
 try:
     PRICE_POLL_INTERVAL = max(0.2, float(os.environ.get("REDIS_PRICE_POLL_INTERVAL", "1.0")))
 except ValueError:
@@ -33,7 +42,7 @@ except ValueError:
 
 # Redis connection (lazy init) with timeouts
 _redis = None
-_executor = ThreadPoolExecutor(max_workers=2)
+_executor = ThreadPoolExecutor(max_workers=8)
 
 
 def get_redis():
@@ -48,6 +57,13 @@ def get_redis():
     return _redis
 
 
+def _first_present(*values):
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
 def decode_tick_payload(payload, fallback_symbol: Optional[str] = None) -> Optional[Dict]:
     """Decode a Redis tick payload into a frontend-safe dict."""
     if isinstance(payload, bytes):
@@ -56,7 +72,12 @@ def decode_tick_payload(payload, fallback_symbol: Optional[str] = None) -> Optio
         try:
             payload = json.loads(payload)
         except json.JSONDecodeError:
-            return None
+            try:
+                payload = {"price": float(payload)}
+            except ValueError:
+                return None
+    if isinstance(payload, (int, float)):
+        payload = {"price": payload}
     if not isinstance(payload, dict):
         return None
 
@@ -65,13 +86,111 @@ def decode_tick_payload(payload, fallback_symbol: Optional[str] = None) -> Optio
         payload.get("symbol")
         or payload.get("contract_month")
         or payload.get("n")
+        or payload.get("INSTRUMENT")
         or values.get("symbol")
+        or values.get("INSTRUMENT")
         or fallback_symbol
     )
+    payload = dict(payload)
     if symbol:
-        payload = dict(payload)
         payload["symbol"] = str(symbol)
+
+    price = _first_present(
+        payload.get("price"),
+        payload.get("last"),
+        payload.get("last_price"),
+        payload.get("lp"),
+        payload.get("LAST"),
+        values.get("price"),
+        values.get("last"),
+        values.get("last_price"),
+        values.get("lp"),
+        values.get("LAST"),
+    )
+    if price is not None:
+        payload["price"] = price
+        payload["last"] = price
+
+    bid = _first_present(payload.get("bid"), payload.get("BID"), values.get("bid"), values.get("BID"))
+    if bid is not None:
+        payload["bid"] = bid
+
+    ask = _first_present(
+        payload.get("ask"),
+        payload.get("ASK"),
+        payload.get("offer"),
+        payload.get("OFFER"),
+        values.get("ask"),
+        values.get("ASK"),
+        values.get("offer"),
+        values.get("OFFER"),
+    )
+    if ask is not None:
+        payload["ask"] = ask
+
+    volume = _first_present(
+        payload.get("volume"),
+        payload.get("VOLUME"),
+        payload.get("totalVolume"),
+        payload.get("TOTAL_VOLUME"),
+        values.get("volume"),
+        values.get("VOLUME"),
+        values.get("totalVolume"),
+        values.get("TOTAL_VOLUME"),
+    )
+    if volume is not None:
+        payload["volume"] = volume
+
+    timestamp = _first_present(
+        payload.get("timestamp"),
+        payload.get("ts"),
+        payload.get("time"),
+        payload.get("TIMESTAMP"),
+        payload.get("UK_TIMESTAMP"),
+        values.get("timestamp"),
+        values.get("ts"),
+        values.get("time"),
+        values.get("TIMESTAMP"),
+        values.get("UK_TIMESTAMP"),
+    )
+    if timestamp is not None:
+        payload["timestamp"] = timestamp
     return payload
+
+
+def _decode_channel_name(channel) -> str:
+    if isinstance(channel, bytes):
+        return channel.decode("utf-8", errors="ignore")
+    return str(channel or "")
+
+
+def symbol_from_pubsub_channel(channel) -> Optional[str]:
+    """Infer an instrument symbol from Redis Pub/Sub channel naming conventions."""
+    name = _decode_channel_name(channel)
+    if not name:
+        return None
+    if name.startswith("TRADOVATE_") and name.endswith("_PRICE"):
+        symbol = name[len("TRADOVATE_"):-len("_PRICE")]
+        return symbol or None
+    if name.startswith("price:"):
+        symbol = name.split(":", 1)[1]
+        return symbol or None
+    if name.startswith("hx:market:ticker:"):
+        symbol = name.rsplit(":", 1)[-1]
+        return symbol or None
+    return None
+
+
+def decode_pubsub_message(message) -> Optional[Dict]:
+    """Decode message/pmessage frames from Redis Pub/Sub into frontend tick events."""
+    if not message or message.get("type") not in {"message", "pmessage"}:
+        return None
+    channel = _decode_channel_name(message.get("channel"))
+    fallback_symbol = symbol_from_pubsub_channel(channel)
+    tick = decode_tick_payload(message.get("data"), fallback_symbol=fallback_symbol)
+    if tick and channel:
+        tick["channel"] = channel
+    return tick
 
 
 def decode_price_hash(raw_prices: Dict[str, str]) -> Dict[str, Dict]:
@@ -87,6 +206,20 @@ def decode_price_hash(raw_prices: Dict[str, str]) -> Dict[str, Dict]:
 def format_sse_error_event(message: str) -> str:
     """Format a Redis/SSE error as an EventSource frame instead of crashing the stream."""
     return f"event: error\ndata: {json.dumps({'error': str(message)})}\n\n"
+
+
+def cache_pubsub_tick(redis_client, tick: Dict) -> None:
+    """Warm snapshot/hash and history keys from Redis Pub/Sub price events."""
+    symbol = tick.get("symbol")
+    if not symbol:
+        return
+    try:
+        tick_json = json.dumps(tick)
+        redis_client.hset(PRICE_HASH_KEY, symbol, tick_json)
+        redis_client.lpush(f"hx:ticks:{symbol}", tick_json)
+        redis_client.ltrim(f"hx:ticks:{symbol}", 0, 999)
+    except Exception:
+        logger.debug("Unable to cache Pub/Sub tick for %s", symbol, exc_info=True)
 
 
 # ── Latest Prices (snapshot) ──────────────────────────────
@@ -120,6 +253,7 @@ async def stream_prices():
         r = None
         pubsub = None
         subscribed_channels = TICK_CHANNELS or ("hx:ticks",)
+        subscribed_patterns = TICK_CHANNEL_PATTERNS
         loop = asyncio.get_event_loop()
         last_seen = {}
         last_poll = 0.0
@@ -127,9 +261,14 @@ async def stream_prices():
         try:
             r = get_redis()
             pubsub = r.pubsub()
-            await loop.run_in_executor(
-                _executor, lambda: pubsub.subscribe(*subscribed_channels)
-            )
+            if subscribed_channels:
+                await loop.run_in_executor(
+                    _executor, lambda: pubsub.subscribe(*subscribed_channels)
+                )
+            if subscribed_patterns:
+                await loop.run_in_executor(
+                    _executor, lambda: pubsub.psubscribe(*subscribed_patterns)
+                )
 
             # Send initial snapshot as first event
             all_prices = await loop.run_in_executor(
@@ -152,10 +291,11 @@ async def stream_prices():
                 message = await loop.run_in_executor(
                     _executor, lambda: pubsub.get_message(timeout=0.5)
                 )
-                if message and message["type"] == "message":
-                    tick = decode_tick_payload(message["data"])
+                if message and message["type"] in {"message", "pmessage"}:
+                    tick = decode_pubsub_message(message)
                     if tick and tick.get("symbol"):
                         last_seen[tick["symbol"]] = message["data"]
+                        await loop.run_in_executor(_executor, lambda t=tick: cache_pubsub_tick(r, t))
                         yield f"event: tick\ndata: {json.dumps(tick)}\n\n"
                         sent_event = True
 
@@ -188,7 +328,10 @@ async def stream_prices():
         finally:
             try:
                 if pubsub is not None:
-                    pubsub.unsubscribe(*subscribed_channels)
+                    if subscribed_channels:
+                        pubsub.unsubscribe(*subscribed_channels)
+                    if subscribed_patterns:
+                        pubsub.punsubscribe(*subscribed_patterns)
                     pubsub.close()
             except Exception:
                 pass
@@ -202,6 +345,80 @@ async def stream_prices():
             "X-Accel-Buffering": "no",  # Disable nginx buffering
         },
     )
+
+
+@router.websocket("/ws")
+async def websocket_prices(websocket: WebSocket):
+    """WebSocket gateway that forwards Redis Pub/Sub price channels to browsers."""
+    await websocket.accept()
+    r = None
+    pubsub = None
+    subscribed_channels = TICK_CHANNELS or ("hx:ticks",)
+    subscribed_patterns = TICK_CHANNEL_PATTERNS
+    loop = asyncio.get_event_loop()
+    last_seen = {}
+    last_poll = 0.0
+
+    try:
+        r = get_redis()
+        pubsub = r.pubsub()
+        if subscribed_channels:
+            await loop.run_in_executor(_executor, lambda: pubsub.subscribe(*subscribed_channels))
+        if subscribed_patterns:
+            await loop.run_in_executor(_executor, lambda: pubsub.psubscribe(*subscribed_patterns))
+
+        all_prices = await loop.run_in_executor(_executor, lambda: r.hgetall(PRICE_HASH_KEY))
+        snapshot_prices = decode_price_hash(all_prices)
+        for symbol, raw_tick in all_prices.items():
+            last_seen[symbol] = raw_tick
+        await websocket.send_json({
+            "type": "snapshot",
+            "prices": snapshot_prices,
+            "channels": list(subscribed_channels),
+            "patterns": list(subscribed_patterns),
+        })
+
+        while True:
+            message = await loop.run_in_executor(_executor, lambda: pubsub.get_message(timeout=0.5))
+            if message and message["type"] in {"message", "pmessage"}:
+                tick = decode_pubsub_message(message)
+                if tick and tick.get("symbol"):
+                    last_seen[tick["symbol"]] = message["data"]
+                    await loop.run_in_executor(_executor, lambda t=tick: cache_pubsub_tick(r, t))
+                    await websocket.send_json({"type": "tick", "tick": tick})
+
+            now = loop.time()
+            if now - last_poll >= PRICE_POLL_INTERVAL:
+                all_prices = await loop.run_in_executor(_executor, lambda: r.hgetall(PRICE_HASH_KEY))
+                for symbol, raw_tick in all_prices.items():
+                    if raw_tick == last_seen.get(symbol):
+                        continue
+                    tick = decode_tick_payload(raw_tick, fallback_symbol=symbol)
+                    if not tick:
+                        continue
+                    last_seen[symbol] = raw_tick
+                    await websocket.send_json({"type": "tick", "tick": tick})
+                last_poll = now
+
+            await asyncio.sleep(0.05)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error("WebSocket price stream error: %s", e)
+        try:
+            await websocket.send_json({"type": "error", "error": str(e)})
+        except Exception:
+            pass
+    finally:
+        try:
+            if pubsub is not None:
+                if subscribed_channels:
+                    pubsub.unsubscribe(*subscribed_channels)
+                if subscribed_patterns:
+                    pubsub.punsubscribe(*subscribed_patterns)
+                pubsub.close()
+        except Exception:
+            pass
 
 
 # ── Tick History ──────────────────────────────────────────

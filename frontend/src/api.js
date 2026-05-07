@@ -1,5 +1,11 @@
 const API_BASE = import.meta.env.VITE_API_URL ? import.meta.env.VITE_API_URL + "/api" : (import.meta.env.PROD ? "/api" : "http://localhost:8000/api");
 
+function websocketUrl(path) {
+    const url = new URL(`${API_BASE}${path}`, window.location.origin);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.toString();
+}
+
 async function request(path, options = {}) {
     const res = await fetch(`${API_BASE}${path}`, {
         headers: { "Content-Type": "application/json" },
@@ -143,6 +149,7 @@ export const marketApi = {
         request(`/market/ticks/${encodeURIComponent(symbol)}?limit=${limit}`),
     status: () => request("/market/status"),
     streamUrl: () => `${API_BASE}/market/stream`,
+    wsUrl: () => websocketUrl("/market/ws"),
     liveQuote: (symbol) =>
         request(`/market/live-quote?symbol=${encodeURIComponent(symbol)}`),
 };

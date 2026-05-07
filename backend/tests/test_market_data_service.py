@@ -31,6 +31,32 @@ class FakeRedis:
 
 
 class MarketDataServiceParserTests(unittest.TestCase):
+    def test_ws_authorize_uses_json_string_md_token(self):
+        from services.tradovate_md_auth import build_ws_authorize_message
+
+        self.assertEqual(
+            build_ws_authorize_message(12, "md-token"),
+            'authorize\n12\n\n"md-token"',
+        )
+
+    def test_renew_market_data_token_extracts_md_token(self):
+        from services.tradovate_md_auth import renew_market_data_token
+
+        class FakeResponse:
+            def read(self):
+                return b'{"accessToken":"rest-token-2","mdAccessToken":"md-token-2"}'
+
+        def fake_open(req, timeout):
+            self.assertIn("/auth/renewaccesstoken", req.full_url)
+            self.assertEqual(req.get_header("Authorization"), "Bearer rest-token-1")
+            self.assertEqual(timeout, 15)
+            return FakeResponse()
+
+        tokens = renew_market_data_token("rest-token-1", opener=fake_open)
+
+        self.assertEqual(tokens["access_token"], "rest-token-2")
+        self.assertEqual(tokens["md_access_token"], "md-token-2")
+
     def test_md_quote_envelope_with_offer_publishes_hx_tick(self):
         from services.market_data_service import MarketDataService
 

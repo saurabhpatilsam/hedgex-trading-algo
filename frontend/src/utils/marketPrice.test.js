@@ -4,6 +4,7 @@ import test from "node:test";
 import {
     formatMarketPrice,
     getDisplayPrice,
+    getPriceSnapshotSignature,
     getQuoteNumber,
     getTickSize,
     normalizeToTick,
@@ -11,6 +12,10 @@ import {
 
 test("getDisplayPrice uses the live last price instead of an invalid bid/ask midpoint", () => {
     assert.equal(getDisplayPrice({ price: 28185, bid: 28184, ask: 28184.5 }, "NQM6"), 28185);
+});
+
+test("getDisplayPrice understands Redis Pub/Sub uppercase Tradovate payloads", () => {
+    assert.equal(getDisplayPrice({ LAST: 7342.25, BID: 7342, ASK: 7342.5 }, "ESM6"), 7342.25);
 });
 
 test("getDisplayPrice falls back to last trade when bid/ask are incomplete", () => {
@@ -42,4 +47,22 @@ test("formatMarketPrice keeps fixed decimals after tick normalization", () => {
     assert.equal(formatMarketPrice(28184.13, "NQM6"), "28,184.25");
     assert.equal(formatMarketPrice(4567.28, "GCM6"), "4,567.30");
     assert.equal(formatMarketPrice(null, "NQM6"), "—");
+});
+
+test("getPriceSnapshotSignature is stable by symbol order and changes on tick movement", () => {
+    const first = getPriceSnapshotSignature({
+        MNQM6: { LAST: 28184.25, BID: 28184, ASK: 28184.5, UK_TIMESTAMP: "2026-05-07T20:00:00Z" },
+        NQM6: JSON.stringify({ price: 28185, bid: 28184.75, ask: 28185.25, timestamp: "2026-05-07T20:00:00Z" }),
+    });
+    const reordered = getPriceSnapshotSignature({
+        NQM6: JSON.stringify({ price: 28185, bid: 28184.75, ask: 28185.25, timestamp: "2026-05-07T20:00:00Z" }),
+        MNQM6: { price: 28184.25, bid: 28184, ask: 28184.5, timestamp: "2026-05-07T20:00:00Z" },
+    });
+    const moved = getPriceSnapshotSignature({
+        MNQM6: { price: 28184.5, bid: 28184.25, ask: 28184.75, timestamp: "2026-05-07T20:00:01Z" },
+        NQM6: { price: 28185, bid: 28184.75, ask: 28185.25, timestamp: "2026-05-07T20:00:00Z" },
+    });
+
+    assert.equal(first, reordered);
+    assert.notEqual(first, moved);
 });

@@ -10,3 +10,15 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"
+      - key: TRADOVATE_ENV
+        value: demo
+      - key: ENABLE_EMBEDDED_MARKET_FEED
+        value: "true"
+      - key: AZURE_REDIS_HOST
+        value: orca-redis-manager.redis.cache.windows.net
+      - key: AZURE_REDIS_PORT
+        value: "6380"
+      - key: REDIS_TICK_CHANNEL_PATTERNS
+        value: TRADOVATE_*_PRICE,price:*,hx:market:ticker:*
+      - key: AZURE_REDIS_PASSWORD
+        sync: false

@@ -55,10 +55,43 @@ export function getDisplayPrice(tick, symbol, explicitTickSize = null) {
         getQuoteNumber(tick.last_price) ??
         getQuoteNumber(tick.last) ??
         getQuoteNumber(tick.lp) ??
+        getQuoteNumber(tick.LAST) ??
         getQuoteNumber(tick.bid) ??
-        getQuoteNumber(tick.ask)
+        getQuoteNumber(tick.BID) ??
+        getQuoteNumber(tick.ask) ??
+        getQuoteNumber(tick.ASK)
     );
     return normalizeToTick(price, symbol ?? tick.symbol, explicitTickSize);
+}
+
+function parseTickForSignature(tick) {
+    if (typeof tick !== "string") return tick && typeof tick === "object" ? tick : {};
+    try {
+        const parsed = JSON.parse(tick);
+        return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+export function getPriceSnapshotSignature(prices = {}) {
+    if (!prices || typeof prices !== "object") return "";
+
+    return Object.entries(prices)
+        .sort(([left], [right]) => String(left).localeCompare(String(right)))
+        .map(([symbol, rawTick]) => {
+            const tick = parseTickForSignature(rawTick);
+            return [
+                symbol,
+                tick.price ?? tick.last ?? tick.last_price ?? tick.lp ?? tick.LAST,
+                tick.bid ?? tick.BID,
+                tick.ask ?? tick.ASK ?? tick.offer ?? tick.OFFER,
+                tick.volume ?? tick.VOLUME ?? tick.totalVolume ?? tick.TOTAL_VOLUME,
+                tick.timestamp ?? tick.ts ?? tick.time ?? tick.TIMESTAMP ?? tick.UK_TIMESTAMP ?? tick.date,
+                tick.change ?? tick.ch ?? tick.chp,
+            ].map((value) => value == null ? "" : String(value)).join("|");
+        })
+        .join(";");
 }
 
 export function formatMarketPrice(value, symbol, explicitTickSize = null) {

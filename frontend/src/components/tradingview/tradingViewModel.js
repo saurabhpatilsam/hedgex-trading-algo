@@ -86,8 +86,18 @@ export function calculateBracketPriceFromPoints({
   return normalizeToTick(entry + direction * pointValue, symbol, explicitTickSize);
 }
 
+export function isPriceStreamFresh({
+  connected,
+  lastUpdateMs,
+  nowMs = Date.now(),
+  staleMs = 2500,
+}) {
+  if (!connected || !lastUpdateMs) return false;
+  return nowMs - lastUpdateMs < staleMs;
+}
+
 export function getTickTimeSeconds(tick) {
-  const raw = tick?.timestamp || tick?.ts || tick?.time || tick?.updated_at || tick?.created_at;
+  const raw = tick?.timestamp || tick?.ts || tick?.time || tick?.TIMESTAMP || tick?.UK_TIMESTAMP || tick?.updated_at || tick?.created_at;
   if (!raw) return Math.floor(Date.now() / 1000);
   if (typeof raw === "number") return raw > 9999999999 ? Math.floor(raw / 1000) : Math.floor(raw);
   const parsed = Date.parse(raw);
@@ -97,14 +107,38 @@ export function getTickTimeSeconds(tick) {
 export function normalizeStreamTick(rawTick, fallbackSymbol = "") {
   if (!rawTick || typeof rawTick !== "object") return null;
   const values = rawTick.v && typeof rawTick.v === "object" ? rawTick.v : rawTick;
-  const symbol = rawTick.symbol || rawTick.contract_month || rawTick.n || values.symbol || fallbackSymbol;
+  const symbol = rawTick.symbol
+    || rawTick.contract_month
+    || rawTick.n
+    || rawTick.INSTRUMENT
+    || values.symbol
+    || values.INSTRUMENT
+    || fallbackSymbol;
   if (!symbol) return null;
 
-  return {
+  const normalized = {
     ...rawTick,
     ...values,
     symbol: String(symbol),
   };
+  const price = normalized.price
+    ?? normalized.last
+    ?? normalized.last_price
+    ?? normalized.lp
+    ?? normalized.LAST;
+  if (price !== undefined && price !== null) {
+    normalized.price = price;
+    normalized.last = price;
+  }
+  const bid = normalized.bid ?? normalized.BID;
+  if (bid !== undefined && bid !== null) normalized.bid = bid;
+  const ask = normalized.ask ?? normalized.ASK ?? normalized.offer ?? normalized.OFFER;
+  if (ask !== undefined && ask !== null) normalized.ask = ask;
+  const volume = normalized.volume ?? normalized.VOLUME ?? normalized.totalVolume ?? normalized.TOTAL_VOLUME;
+  if (volume !== undefined && volume !== null) normalized.volume = volume;
+  const timestamp = normalized.timestamp ?? normalized.ts ?? normalized.time ?? normalized.TIMESTAMP ?? normalized.UK_TIMESTAMP;
+  if (timestamp !== undefined && timestamp !== null) normalized.timestamp = timestamp;
+  return normalized;
 }
 
 export function toCandleSeries(candles = []) {
