@@ -77,6 +77,15 @@ class MarketRedisConfigTests(unittest.TestCase):
         self.assertEqual(set(prices), {"MNQM6"})
         self.assertEqual(prices["MNQM6"]["price"], 27782.75)
 
+    def test_format_sse_error_event_returns_frontend_safe_error_frame(self):
+        from routers.market import format_sse_error_event
+
+        event = format_sse_error_event("Redis unavailable")
+
+        self.assertTrue(event.startswith("event: error\n"))
+        self.assertIn('"error": "Redis unavailable"', event)
+        self.assertTrue(event.endswith("\n\n"))
+
 
 if __name__ == "__main__":
     unittest.main()

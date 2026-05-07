@@ -16,9 +16,13 @@ class FakeRedis:
 class FakeDb:
     def __init__(self):
         self.commits = 0
+        self.added = []
 
     def commit(self):
         self.commits += 1
+
+    def add(self, obj):
+        self.added.append(obj)
 
 
 class FakeBridgeClient:
@@ -45,6 +49,10 @@ class FakeBridgeClient:
         assert account_id == "D18156785"
         return list(self.positions)
 
+    def get_tv_account_state(self, account_id):
+        assert account_id == "D18156785"
+        return {"balance": 50000, "equity": 50000}
+
     def cancel_tv_order(self, account_id, order_id):
         self.cancelled.append((account_id, order_id))
         return {"s": "ok"}
@@ -55,6 +63,55 @@ class FakeBridgeClient:
 
 
 class TVBridgeServiceTests(unittest.TestCase):
+    def test_owner_token_lookup_does_not_fall_back_to_global_token(self):
+        from required_api import tradovate_client
+        from unittest.mock import patch
+
+        class TokenRedis:
+            def get(self, key):
+                values = {
+                    "bearer_token": "eyJ.global.token.with.length",
+                    "hx:token:MANISH": json.dumps({
+                        "token": "eyJ.manish.token.with.length",
+                        "expires_at": 9999999999,
+                    }),
+                }
+                return values.get(key)
+
+            def scan_iter(self, match="*", count=100):
+                return []
+
+        with patch.object(tradovate_client, "_get_azure_redis", return_value=TokenRedis()):
+            self.assertEqual(
+                tradovate_client.get_bearer_token_from_redis(token_owner="MANISH"),
+                "eyJ.manish.token.with.length",
+            )
+            self.assertIsNone(
+                tradovate_client.get_bearer_token_from_redis(token_owner="MISSING")
+            )
+
+    def test_credential_account_sync_uses_credential_scoped_bridge_client(self):
+        from services import tv_bridge_service
+        from unittest.mock import patch
+
+        db = FakeDb()
+        client = FakeBridgeClient()
+        credential = SimpleNamespace(
+            id=77,
+            user_id=8,
+            login_id="MANISH",
+            accounts=[],
+            error_message="old",
+            last_synced_at=None,
+        )
+
+        with patch.object(tv_bridge_service, "get_bridge_client", return_value=client) as get_client:
+            report = tv_bridge_service.sync_credential_accounts_from_bridge(db, credential)
+
+        get_client.assert_called_once_with(None, credential=credential)
+        self.assertEqual(report["synced"], 1)
+        self.assertEqual(db.added[0].credential_id, 77)
+
     def test_redis_quote_requires_bid_and_ask(self):
         from services.tv_bridge_service import RedisQuoteMissing, get_redis_quote
 

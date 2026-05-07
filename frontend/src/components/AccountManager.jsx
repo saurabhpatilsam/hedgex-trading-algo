@@ -114,7 +114,15 @@ export default function AccountManager() {
         clearAlerts();
         try {
             const res = await accountsApi.syncSelected([...selectedAccounts]);
-            setSuccess(`Synced ${res.synced} account(s), ${res.errors} error(s)`);
+            if (res.errors > 0) {
+                const details = (res.results || [])
+                    .filter(r => r.error)
+                    .map(r => `${r.account}: ${r.error}`)
+                    .join(" | ");
+                setError(details || `Synced ${res.synced} account(s), ${res.errors} error(s)`);
+            } else {
+                setSuccess(`Synced ${res.synced} account(s)`);
+            }
             await load();
         } catch (e) {
             setError(e.message);
@@ -308,7 +316,12 @@ export default function AccountManager() {
         setSyncingUsers(prev => new Set(prev).add(userId));
         try {
             const res = await usersApi.syncAll(userId);
-            setSuccess(res?.message || "Sync complete");
+            const failures = (res?.results || []).filter(r => !r.success);
+            if (failures.length > 0) {
+                setError(failures.map(r => `${r.login_id}: ${r.message}`).join(" | "));
+            } else {
+                setSuccess(res?.message || "Sync complete");
+            }
             await load();
         } catch (e) {
             setError(e.message);
@@ -743,7 +756,6 @@ export default function AccountManager() {
                                                                     <div className="sub-acct-header">
                                                                         <div></div>{/* Checkbox */}
                                                                         <div className="sub-header-cell left">Account Name</div>
-                                                                        <div className="sub-header-cell">TV ID</div>
                                                                         <div className="sub-header-cell">Balance</div>
                                                                         <div className="sub-header-cell">Buffer</div>
                                                                         <div className="sub-header-cell">Liq. Limit</div>
@@ -773,12 +785,6 @@ export default function AccountManager() {
                                                                                         {acct.name && acct.name.length > 8
                                                                                             ? `${acct.name.substring(0, 4)}...${acct.name.substring(acct.name.length - 4)}`
                                                                                             : acct.name}
-                                                                                    </span>
-                                                                                    <span
-                                                                                        className={`sub-compact-metric ${acct.tv_account_id ? "" : "mapping-missing"}`}
-                                                                                        title={acct.tv_account_id ? `TV Bridge: ${acct.tv_account_id}` : "No TV Bridge account mapped"}
-                                                                                    >
-                                                                                        {acct.tv_account_id || "Missing"}
                                                                                     </span>
                                                                                     <span className="sub-compact-metric" style={{ fontWeight: 700, color: "var(--gray-100)" }}>
                                                                                         ${acct.balance ? acct.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}

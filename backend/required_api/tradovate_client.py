@@ -81,25 +81,84 @@ def _get_azure_redis():
     return _azure_redis_instance
 
 
-def get_bearer_token_from_redis() -> Optional[str]:
+def _extract_token_value(raw: Any) -> Optional[str]:
+    """Return a token from a raw Redis value or JSON cache payload."""
+    if not raw:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    if _looks_like_token(raw):
+        return raw
+    try:
+        data = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    token = data.get("token") or data.get("accessToken") or data.get("access_token")
+    expires_at = data.get("expires_at")
+    if expires_at is not None:
+        try:
+            if float(expires_at) <= time.time():
+                return None
+        except (TypeError, ValueError):
+            return None
+    return token if _looks_like_token(token) else None
+
+
+def _credential_token_keys(token_owner: Optional[str] = None, user_id: Optional[int] = None) -> List[str]:
+    keys: List[str] = []
+    if token_owner:
+        owner = str(token_owner).strip()
+        if owner:
+            keys.extend([
+                f"{_TOKEN_CACHE_PREFIX}{owner}",
+                f"token:{owner}:access",
+                f"token:{owner}:bearer",
+                f"token:{owner}",
+            ])
+    if user_id is not None:
+        keys.extend([
+            f"token:{user_id}:access",
+            f"token:{user_id}:bearer",
+            f"token:{user_id}",
+        ])
+    return list(dict.fromkeys(keys))
+
+
+def get_bearer_token_from_redis(
+    token_owner: Optional[str] = None,
+    user_id: Optional[int] = None,
+) -> Optional[str]:
     """
     Retrieve a bearer token from Azure Redis.
 
     Search strategy:
-      1. Check well-known key names (bearer_token, auth_token, etc.)
-      2. Scan all keys looking for a JWT-like value
-      3. Check hash fields for token values
+      1. If token_owner/user_id is supplied, check only credential-scoped keys.
+      2. Otherwise check well-known key names (bearer_token, auth_token, etc.)
+      3. Otherwise scan token cache and hash/string keys.
 
     Returns the token string or None.
     """
     try:
         r = _get_azure_redis()
 
+        scoped_keys = _credential_token_keys(token_owner=token_owner, user_id=user_id)
+        if scoped_keys:
+            for key in scoped_keys:
+                try:
+                    token = _extract_token_value(r.get(key))
+                    if token:
+                        logger.info(f"[RedisAuth] Found scoped bearer token at key: {key}")
+                        return token
+                except Exception:
+                    continue
+            logger.warning("[RedisAuth] No scoped bearer token found in Redis for %s/%s", token_owner, user_id)
+            return None
+
         # Strategy 1: Check well-known keys first
         for key in _BEARER_TOKEN_KEYS:
             try:
-                value = r.get(key)
-                if value and _looks_like_token(value):
+                value = _extract_token_value(r.get(key))
+                if value:
                     logger.info(f"[RedisAuth] Found bearer token at key: {key}")
                     return value
             except Exception:
@@ -110,12 +169,11 @@ def get_bearer_token_from_redis() -> Optional[str]:
             try:
                 raw = r.get(key)
                 if raw:
-                    data = json.loads(raw)
-                    token = data.get("token")
-                    if token and _looks_like_token(token):
+                    token = _extract_token_value(raw)
+                    if token:
                         logger.info(f"[RedisAuth] Found bearer token in cache key: {key}")
                         return token
-            except (json.JSONDecodeError, AttributeError):
+            except AttributeError:
                 pass
 
         # Strategy 3: Scan all string keys for token-like values
@@ -123,16 +181,16 @@ def get_bearer_token_from_redis() -> Optional[str]:
             try:
                 key_type = r.type(key)
                 if key_type == "string":
-                    value = r.get(key)
-                    if value and _looks_like_token(value):
+                    value = _extract_token_value(r.get(key))
+                    if value:
                         logger.info(f"[RedisAuth] Found bearer token at key: {key}")
                         return value
                 elif key_type == "hash":
                     hash_data = r.hgetall(key)
                     for field, val in hash_data.items():
-                        if _looks_like_token(val):
+                        if _extract_token_value(val):
                             logger.info(f"[RedisAuth] Found bearer token in hash {key}.{field}")
-                            return val
+                            return _extract_token_value(val)
             except Exception:
                 continue
 
@@ -1006,14 +1064,14 @@ class TradovateClient:
             logger.error(f"TV Bridge GET {path} failed: {e}")
             raise
 
-    def ensure_token(self):
+    def ensure_token(self, token_owner: Optional[str] = None, user_id: Optional[int] = None):
         """
         Ensure a valid bearer token is available.
         Priority: 1) existing token, 2) Azure Redis, 3) raise error.
         """
         if self.access_token:
             return self.access_token
-        token = get_bearer_token_from_redis()
+        token = get_bearer_token_from_redis(token_owner=token_owner, user_id=user_id)
         if token:
             self.access_token = token
             logger.info("[Auth] Token loaded from Azure Redis")

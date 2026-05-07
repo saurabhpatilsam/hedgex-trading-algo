@@ -147,6 +147,20 @@ export const marketApi = {
         request(`/market/live-quote?symbol=${encodeURIComponent(symbol)}`),
 };
 
+// ── Historical Market Data ────────────────────────────────
+export const marketDataApi = {
+    candles: ({ symbol, timeframe, startTime, endTime, limit = 1200 }) => {
+        const params = new URLSearchParams({
+            symbol,
+            timeframe,
+            start_time: startTime,
+            end_time: endTime,
+            limit: String(limit),
+        });
+        return request(`/market-data/candles?${params.toString()}`);
+    },
+};
+
 // ── Trading System (New) ───────────────────────────────────
 export const tradingApi = {
     // Strategy types
@@ -292,4 +306,3 @@ export const brokerApi = {
             method: "DELETE",
         }),
 };
-

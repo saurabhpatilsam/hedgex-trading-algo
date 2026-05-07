@@ -40,7 +40,11 @@ def _safe_commit(db: Any) -> None:
         commit()
 
 
-def get_bridge_client(client=None):
+def _credential_token_owner(credential: Any) -> Optional[str]:
+    return str(getattr(credential, "login_id", "") or "").strip() or None
+
+
+def get_bridge_client(client=None, credential: Any = None):
     """Return a TV Bridge client whose bearer token came from Redis."""
     if client is not None:
         return client
@@ -48,7 +52,22 @@ def get_bridge_client(client=None):
     from required_api.tradovate_client import TradovateClient
 
     bridge_client = TradovateClient()
-    bridge_client.ensure_token()
+    try:
+        if credential is not None:
+            bridge_client.ensure_token(
+                token_owner=_credential_token_owner(credential),
+                user_id=getattr(credential, "user_id", None),
+            )
+        else:
+            bridge_client.ensure_token()
+    except Exception as exc:
+        login_id = _credential_token_owner(credential)
+        if login_id:
+            raise TVAccountMappingError(
+                f"Authentication token expired or missing in Redis for {login_id}. "
+                "Reconnect TradingView/Tradovate and try refresh again."
+            ) from exc
+        raise
     return bridge_client
 
 
@@ -147,7 +166,7 @@ def resolve_tv_account_id(db: Any, account: Any, client=None) -> str:
     if existing:
         return str(existing)
 
-    bridge_client = get_bridge_client(client)
+    bridge_client = get_bridge_client(client, credential=getattr(account, "credential", None))
     tv_account = _match_tv_account(account, bridge_client.get_tv_accounts())
     if not tv_account or not tv_account.get("id"):
         raise TVAccountMappingError(f"No TV Bridge account matched local account '{_account_label(account)}'")
@@ -263,7 +282,6 @@ def place_order_for_accounts(
     symbol = getattr(instrument, "contract_month", None) or getattr(instrument, "symbol", None) or str(instrument)
     order_type_value = _validate_order_payload(order_type, limit_price, stop_price, duration_type)
     quote = get_redis_quote(symbol, redis_client=redis_client)
-    bridge_client = get_bridge_client(client)
 
     results = []
     success_count = 0
@@ -271,6 +289,7 @@ def place_order_for_accounts(
 
     for account in accounts:
         try:
+            bridge_client = get_bridge_client(client, credential=getattr(account, "credential", None))
             tv_account_id = resolve_tv_account_id(db, account, client=bridge_client)
             raw_result = bridge_client.place_tv_order(
                 account_id=tv_account_id,
@@ -396,12 +415,12 @@ def flatten_accounts(db: Any, accounts: List[Any], symbol: Optional[str] = None,
 
 
 def sync_accounts_from_bridge(db: Any, accounts: List[Any], client=None) -> Dict[str, Any]:
-    bridge_client = get_bridge_client(client)
-    tv_accounts = bridge_client.get_tv_accounts()
     results = []
 
     for account in accounts:
         try:
+            bridge_client = get_bridge_client(client, credential=getattr(account, "credential", None))
+            tv_accounts = bridge_client.get_tv_accounts()
             tv_account = _match_tv_account(account, tv_accounts)
             if not tv_account:
                 raise TVAccountMappingError(f"No TV Bridge account matched local account '{_account_label(account)}'")
@@ -444,7 +463,7 @@ def sync_credential_accounts_from_bridge(db: Any, credential: Any, client=None) 
     """Create or update local accounts for one credential from TV Bridge /accounts."""
     from models import Account
 
-    bridge_client = get_bridge_client(client)
+    bridge_client = get_bridge_client(client, credential=credential)
     tv_accounts = bridge_client.get_tv_accounts()
     existing = {account.name: account for account in getattr(credential, "accounts", [])}
     results = []

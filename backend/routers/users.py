@@ -16,6 +16,10 @@ def _shorten_error(error: str) -> str:
     if not error:
         return error
     e = error.lower()
+    if "token" in e and "redis" in e:
+        return "Authentication token expired or missing in Redis — reconnect TradingView/Tradovate and refresh again"
+    if "tradingview" in e and ("integration" in e or "addon" in e or "add-on" in e):
+        return "TradingView integration is not active for this broker account"
     if "tradingview" in e and "entitled" in e:
         return "Login blocked: Account failed, inactive, or missing TV Add-On"
     if "incorrect username or password" in e:

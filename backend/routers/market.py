@@ -84,6 +84,11 @@ def decode_price_hash(raw_prices: Dict[str, str]) -> Dict[str, Dict]:
     return prices
 
 
+def format_sse_error_event(message: str) -> str:
+    """Format a Redis/SSE error as an EventSource frame instead of crashing the stream."""
+    return f"event: error\ndata: {json.dumps({'error': str(message)})}\n\n"
+
+
 # ── Latest Prices (snapshot) ──────────────────────────────
 
 
@@ -112,15 +117,20 @@ async def stream_prices():
     Frontend connects via EventSource('/api/market/stream').
     """
     async def event_generator():
-        r = get_redis()
-        pubsub = r.pubsub()
+        r = None
+        pubsub = None
         subscribed_channels = TICK_CHANNELS or ("hx:ticks",)
-        pubsub.subscribe(*subscribed_channels)
         loop = asyncio.get_event_loop()
         last_seen = {}
         last_poll = 0.0
 
         try:
+            r = get_redis()
+            pubsub = r.pubsub()
+            await loop.run_in_executor(
+                _executor, lambda: pubsub.subscribe(*subscribed_channels)
+            )
+
             # Send initial snapshot as first event
             all_prices = await loop.run_in_executor(
                 _executor, lambda: r.hgetall(PRICE_HASH_KEY)
@@ -174,11 +184,12 @@ async def stream_prices():
             pass
         except Exception as e:
             logger.error(f"SSE stream error: {e}")
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            yield format_sse_error_event(str(e))
         finally:
             try:
-                pubsub.unsubscribe(*subscribed_channels)
-                pubsub.close()
+                if pubsub is not None:
+                    pubsub.unsubscribe(*subscribed_channels)
+                    pubsub.close()
             except Exception:
                 pass
 
