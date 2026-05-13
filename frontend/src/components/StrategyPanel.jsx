@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { strategyApi, groupsApi, instrumentsApi, usersApi } from "../api";
+import { useMarketPrices } from "../services/MarketPriceProvider";
+import { getDisplayPrice } from "../utils/marketPrice";
 
 export default function StrategyPanel() {
+    const { livePrices } = useMarketPrices();
     const [groups, setGroups] = useState([]);
     const [instruments, setInstruments] = useState([]);
     const [orders, setOrders] = useState([]);
@@ -382,6 +385,16 @@ export default function StrategyPanel() {
                         <span style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--accent-1)', background: 'rgba(139, 92, 246, 0.1)', padding: '2px 8px', borderRadius: '4px' }}>
                             {instrument?.symbol || `#${order.instrument_id}`}
                         </span>
+                        {/* Live price from shared Redis stream */}
+                        {(() => {
+                            const sym = instrument?.contract_month || instrument?.symbol;
+                            const lp = sym ? getDisplayPrice(livePrices[sym], sym) : null;
+                            return lp != null ? (
+                                <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#60a5fa', background: 'rgba(59,130,246,0.1)', padding: '2px 8px', borderRadius: '4px', fontFamily: 'monospace' }}>
+                                    ${lp.toFixed(2)}
+                                </span>
+                            ) : null;
+                        })()}
                         <span style={{ fontSize: '12px', color: 'var(--gray-400)' }}>
                             ({order.quantity} Contract{order.quantity !== 1 ? 's' : ''}, Primary is {order.direction})
                         </span>
@@ -461,6 +474,21 @@ export default function StrategyPanel() {
                         >
                             {isFetchPrice ? "⏳ Fetching…" : "📡 Get Last Price"}
                         </button>
+                        {/* Auto-fill from live Redis stream */}
+                        {(() => {
+                            const sym = instrument?.contract_month || instrument?.symbol;
+                            const lp = sym ? getDisplayPrice(livePrices[sym], sym) : null;
+                            return lp != null ? (
+                                <button
+                                    className="btn btn-sm"
+                                    onClick={() => setEntryPrices(prev => ({ ...prev, [order.id]: String(lp) }))}
+                                    style={{ background: 'rgba(59,130,246,0.1)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.25)', whiteSpace: 'nowrap', fontSize: '12px', padding: '8px 12px' }}
+                                    title={`Use live price: $${lp.toFixed(2)}`}
+                                >
+                                    📶 Use Live (${lp.toFixed(2)})
+                                </button>
+                            ) : null;
+                        })()}
                         <span style={{ color: 'var(--gray-500)', fontSize: '12px' }}>|</span>
                         <button
                             className="btn btn-sm btn-execute"

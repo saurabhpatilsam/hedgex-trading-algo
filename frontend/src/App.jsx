@@ -6,6 +6,7 @@ import TradingDashboard from "./components/TradingDashboard";
 import TradingViewWorkspace from "./components/tradingview/TradingViewWorkspace";
 import PositionsPanel from "./components/PositionsPanel";
 import NetworkLogs from "./components/NetworkLogs";
+import { MarketPriceProvider } from "./services/MarketPriceProvider";
 import "./App.css";
 
 // ── Error Boundary ─────────────────────────────────────────
@@ -87,6 +88,7 @@ function App() {
 
   return (
     <ErrorBoundary>
+      <MarketPriceProvider>
       <div className="app">
         {/* Sidebar */}
         <aside className="sidebar">
@@ -125,6 +127,7 @@ function App() {
           {activeTab === "logs" && <NetworkLogs />}
         </main>
       </div>
+      </MarketPriceProvider>
     </ErrorBoundary>
   );
 }

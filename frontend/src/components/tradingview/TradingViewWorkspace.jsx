@@ -26,6 +26,7 @@ import {
   getInstrumentDisplaySymbol,
   isPriceStreamFresh,
   mergeLiveCandle,
+  normalizeMarketStreamMessage,
   normalizeOrderType,
   normalizeStreamTick,
   toggleAccountSelection,
@@ -367,44 +368,44 @@ export default function TradingViewWorkspace() {
   }, []);
 
   useEffect(() => {
-    const ws = new WebSocket(marketApi.wsUrl());
-    streamRef.current = ws;
+    const stream = new EventSource(marketApi.streamUrl());
+    streamRef.current = stream;
 
-    ws.onopen = () => {
+    stream.onopen = () => {
       setStreamConnected(true);
-      setChartStatus("Redis Pub/Sub websocket active");
+      setChartStatus("Redis Pub/Sub stream active");
     };
 
-    ws.onmessage = (event) => {
+    const handleFrame = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        if (data.type === "snapshot" && data.prices) {
-          applyPriceSnapshot(data.prices, "Redis snapshot loaded");
+        const message = normalizeMarketStreamMessage(JSON.parse(event.data));
+        if (!message) return;
+
+        if (message.type === "snapshot") {
+          applyPriceSnapshot(message.prices, "Redis snapshot loaded");
           return;
         }
-        if (data.type === "error") {
-          setChartStatus(data.error ? `Redis stream error: ${data.error}` : "Redis stream error");
+        if (message.type === "error") {
+          setChartStatus(message.error ? `Redis stream error: ${message.error}` : "Redis stream error");
           return;
         }
-        const tick = data.type === "price_update"
-          ? { ...(data.data || {}), symbol: data.symbol }
-          : data.tick || data;
-        applyLiveTick(tick);
+        applyLiveTick(message.tick);
       } catch {
         /* ignore malformed stream frames */
       }
     };
 
-    ws.onerror = () => {
+    stream.addEventListener("snapshot", handleFrame);
+    stream.addEventListener("tick", handleFrame);
+    stream.addEventListener("message", handleFrame);
+    stream.addEventListener("error", (event) => {
+      if ("data" in event && event.data) handleFrame(event);
       setStreamConnected(false);
       setChartStatus("Redis stream reconnecting");
-    };
-    ws.onclose = () => {
-      setStreamConnected(false);
-      setChartStatus("Redis stream reconnecting");
-    };
+    });
+
     return () => {
-      ws.close();
+      stream.close();
       setStreamConnected(false);
     };
   }, [applyLiveTick, applyPriceSnapshot]);

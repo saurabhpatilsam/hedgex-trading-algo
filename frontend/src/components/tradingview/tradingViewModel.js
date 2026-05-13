@@ -141,6 +141,33 @@ export function normalizeStreamTick(rawTick, fallbackSymbol = "") {
   return normalized;
 }
 
+export function normalizeMarketStreamMessage(data) {
+  if (!data || typeof data !== "object") return null;
+
+  if (data.type === "snapshot" && data.prices && typeof data.prices === "object") {
+    return { type: "snapshot", prices: data.prices };
+  }
+
+  if (data.type === "error") {
+    return { type: "error", error: data.error || data.message || "Redis stream error" };
+  }
+
+  if (data.type === "tick") {
+    const tick = data.tick || data.data || data;
+    return tick ? { type: "tick", tick } : null;
+  }
+
+  if (data.type === "price_update") {
+    return { type: "tick", tick: { ...(data.data || {}), symbol: data.symbol } };
+  }
+
+  if (data.symbol || data.INSTRUMENT || data.LAST !== undefined || data.price !== undefined) {
+    return { type: "tick", tick: data };
+  }
+
+  return null;
+}
+
 export function toCandleSeries(candles = []) {
   return candles
     .map((item) => {

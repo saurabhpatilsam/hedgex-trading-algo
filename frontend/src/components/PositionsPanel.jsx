@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { brokerApi } from "../api";
+import { useMarketPrices } from "../services/MarketPriceProvider";
+import { getDisplayPrice, formatMarketPrice } from "../utils/marketPrice";
 
 const STATUS_COLORS = {
     working: { bg: "rgba(59,130,246,0.15)", text: "#60a5fa", border: "rgba(59,130,246,0.3)" },
@@ -17,6 +19,7 @@ const SIDE_COLORS = {
 };
 
 export default function PositionsPanel() {
+    const { livePrices } = useMarketPrices();
     const [accounts, setAccounts] = useState([]);
     const [positions, setPositions] = useState([]);
     const [orders, setOrders] = useState([]);
@@ -190,6 +193,7 @@ export default function PositionsPanel() {
                             <th>Raw</th>
                             <th>Qty</th>
                             <th>Avg Price</th>
+                            <th>Live Price</th>
                             <th>Unrealized P/L</th>
                             <th>Action</th>
                         </tr>
@@ -197,7 +201,19 @@ export default function PositionsPanel() {
                     <tbody>
                         {filteredPositions.map((pos, i) => {
                             const side = (pos.side || (pos.qty > 0 ? "buy" : "sell")).toLowerCase();
-                            const upl = pos.unrealizedPl ?? 0;
+                            const brokerUpl = pos.unrealizedPl ?? 0;
+                            // Derive instrument symbol from position for live price lookup
+                            const posSymbol = pos.instrument || pos.symbol || "";
+                            const livePrice = getDisplayPrice(livePrices[posSymbol], posSymbol);
+                            // Compute live P&L from stream if available; fall back to broker snapshot
+                            let upl = brokerUpl;
+                            if (livePrice != null && pos.avgPrice != null && Math.abs(pos.qty || 0) > 0) {
+                                const qty = Math.abs(pos.qty);
+                                const isLong = side === "buy" || side === "long";
+                                upl = isLong
+                                    ? (livePrice - pos.avgPrice) * qty
+                                    : (pos.avgPrice - livePrice) * qty;
+                            }
                             return (
                                 <tr key={i} className={upl >= 0 ? "pp-row-profit" : "pp-row-loss"}>
                                     <td className="pp-cell-account">{pos._account_name || pos._account_id}</td>
@@ -211,6 +227,15 @@ export default function PositionsPanel() {
                                     <td className="pp-cell-dim">{pos.side || "—"}</td>
                                     <td className="pp-cell-mono">{Math.abs(pos.qty || 0)}</td>
                                     <td className="pp-cell-mono">{pos.avgPrice != null ? `$${pos.avgPrice.toFixed(2)}` : "—"}</td>
+                                    <td className="pp-cell-mono">
+                                        {livePrice != null ? (
+                                            <span style={{ color: "#60a5fa", fontWeight: 600 }}>
+                                                ${formatMarketPrice(livePrice, posSymbol)}
+                                            </span>
+                                        ) : (
+                                            <span className="pp-cell-dim">—</span>
+                                        )}
+                                    </td>
                                     <td className={`pp-cell-mono ${upl >= 0 ? "pp-positive" : "pp-negative"}`}>
                                         {upl >= 0 ? "+" : ""}${upl.toFixed(2)}
                                     </td>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { panelApi, groupsApi, instrumentsApi, accountsApi, usersApi, marketApi } from "../api";
+import { panelApi, groupsApi, instrumentsApi, accountsApi, usersApi } from "../api";
+import { useMarketPrices } from "../services/MarketPriceProvider";
 import { formatMarketPrice, getDisplayPrice, getQuoteNumber, getTickSize } from "../utils/marketPrice";
 
 /**
@@ -8,7 +9,9 @@ import { formatMarketPrice, getDisplayPrice, getQuoteNumber, getTickSize } from 
  * Props:
  *   livePrices  — { symbol: { price, bid, ask, change, ... } } from SSE
  */
-export default function TradingPanel({ livePrices = {} }) {
+export default function TradingPanel({ livePrices: propPrices }) {
+    const { livePrices: contextPrices } = useMarketPrices();
+    const livePrices = propPrices || contextPrices;
     // ── Data State ──────────────────────────────────────
     const [groups, setGroups] = useState([]);
     const [instruments, setInstruments] = useState([]);
@@ -71,42 +74,8 @@ export default function TradingPanel({ livePrices = {} }) {
     const instrumentTickSize = selectedInstrument?.tick_size ?? getTickSize(contractSymbol);
     const liveTick = livePrices[contractSymbol];
 
-    // ── Redis price polling fallback ─────────────────────
-    const [fallbackPrice, setFallbackPrice] = useState(null);
-    const fallbackRef = useRef(null);
-
-    useEffect(() => {
-        // If SSE provides no data for this symbol, poll the Redis-backed quote endpoint.
-        const sseHasData = getDisplayPrice(liveTick, contractSymbol, instrumentTickSize) != null;
-        if (sseHasData || !contractSymbol) {
-            // SSE is working, clear any fallback interval
-            if (fallbackRef.current) {
-                clearInterval(fallbackRef.current);
-                fallbackRef.current = null;
-            }
-            return;
-        }
-
-        // Start polling
-        const poll = () => {
-            marketApi.liveQuote(contractSymbol).then(data => {
-                if (getDisplayPrice(data, contractSymbol, instrumentTickSize) != null) {
-                    setFallbackPrice(data);
-                }
-            }).catch(() => { });
-        };
-        poll(); // Immediate first call
-        fallbackRef.current = setInterval(poll, 5000);
-
-        return () => {
-            if (fallbackRef.current) {
-                clearInterval(fallbackRef.current);
-                fallbackRef.current = null;
-            }
-        };
-    }, [contractSymbol, instrumentTickSize, liveTick]);
-
-    const liveData = liveTick || (fallbackPrice?.symbol === contractSymbol ? fallbackPrice : {});
+    // Live price data — the shared provider handles fallback polling centrally
+    const liveData = liveTick || {};
     const currentPrice = getDisplayPrice(liveData, contractSymbol, instrumentTickSize);
     const bid = getQuoteNumber(liveData.bid) ?? currentPrice;
     const ask = getQuoteNumber(liveData.ask) ?? currentPrice;

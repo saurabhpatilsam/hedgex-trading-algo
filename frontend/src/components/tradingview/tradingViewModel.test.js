@@ -6,6 +6,9 @@ import {
   buildPanelOrderPayload,
   calculateBracketPriceFromPoints,
   getGroupAccountIds,
+  isPriceStreamFresh,
+  normalizeMarketStreamMessage,
+  normalizeStreamTick,
   timeframeToSeconds,
   toggleAccountSelection,
   toCandleSeries,
@@ -175,4 +178,67 @@ test("calculateBracketPriceFromPoints offsets from entry price by side and snaps
     bracket: "stopLoss",
     symbol: "NQM6",
   }), 110);
+});
+
+test("isPriceStreamFresh detects stale or disconnected real-time streams", () => {
+  assert.equal(isPriceStreamFresh({
+    connected: true,
+    lastUpdateMs: 1_000,
+    nowMs: 1_900,
+    staleMs: 1_500,
+  }), true);
+
+  assert.equal(isPriceStreamFresh({
+    connected: true,
+    lastUpdateMs: 1_000,
+    nowMs: 2_600,
+    staleMs: 1_500,
+  }), false);
+
+  assert.equal(isPriceStreamFresh({
+    connected: false,
+    lastUpdateMs: 1_000,
+    nowMs: 1_100,
+    staleMs: 1_500,
+  }), false);
+});
+
+test("normalizeStreamTick maps Tradovate Redis PubSub uppercase price payloads", () => {
+  const tick = normalizeStreamTick({
+    INSTRUMENT: "ESM6",
+    LAST: 7367.25,
+    TIMESTAMP: "2026-05-07T18:30:00Z",
+  }, "ESM6");
+
+  assert.equal(tick.symbol, "ESM6");
+  assert.equal(tick.price, 7367.25);
+  assert.equal(tick.last, 7367.25);
+  assert.equal(tick.timestamp, "2026-05-07T18:30:00Z");
+});
+
+test("normalizeMarketStreamMessage accepts SSE snapshot and tick frames", () => {
+  assert.deepEqual(normalizeMarketStreamMessage({
+    type: "snapshot",
+    prices: {
+      ESM6: { INSTRUMENT: "ESM6", LAST: 7422.5 },
+    },
+  }), {
+    type: "snapshot",
+    prices: {
+      ESM6: { INSTRUMENT: "ESM6", LAST: 7422.5 },
+    },
+  });
+
+  assert.deepEqual(normalizeMarketStreamMessage({
+    TIMESTAMP: "2026-05-13T00:11:27Z",
+    LAST: 29152.75,
+    INSTRUMENT: "NQM6",
+  }), {
+    type: "tick",
+    tick: {
+      TIMESTAMP: "2026-05-13T00:11:27Z",
+      LAST: 29152.75,
+      INSTRUMENT: "NQM6",
+    },
+  });
 });

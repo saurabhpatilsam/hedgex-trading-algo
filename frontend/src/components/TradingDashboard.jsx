@@ -1,12 +1,11 @@
-import { memo, useState, useEffect, useCallback, useRef } from "react";
-import { tradingApi, marketApi } from "../api";
+import { memo, useState, useEffect, useCallback } from "react";
+import { tradingApi } from "../api";
 import TradingPanel from "./TradingPanel";
-import { formatMarketPrice, getDisplayPrice, getPriceSnapshotSignature, getQuoteNumber } from "../utils/marketPrice";
+import { useMarketPrices } from "../services/MarketPriceProvider";
+import { formatMarketPrice, getDisplayPrice, getQuoteNumber } from "../utils/marketPrice";
 
 const standardizeSymbol = s => typeof s === 'string' ? s.replace(/[\s-]/g, '').toUpperCase() : '';
 const getInstrumentPrefix = s => standardizeSymbol(s).replace(/[A-Z]\d{1,2}$/i, '');
-const STREAM_STALE_MS = 2500;
-const REDIS_FALLBACK_POLL_MS = 1000;
 
 const formatTickerVolume = value => {
     const number = Number(value);
@@ -76,13 +75,8 @@ export default function TradingDashboard() {
     const [killConfirm, setKillConfirm] = useState(false);
     const [activeSection, setActiveSection] = useState("overview");
 
-    // Live price ticker state
-    const [livePrices, setLivePrices] = useState({});
-    const [mdStatus, setMdStatus] = useState(null);
-    const [sseConnected, setSseConnected] = useState(false);
-    const eventSourceRef = useRef(null);
-    const lastPriceUpdateRef = useRef(0);
-    const priceSnapshotSignatureRef = useRef("");
+    // ── Live prices from shared provider ──────────────────
+    const { livePrices, mdStatus, sseConnected } = useMarketPrices();
 
     const refresh = useCallback(async () => {
         setLoading(true);
@@ -168,113 +162,8 @@ export default function TradingDashboard() {
 
     const unreadAlerts = alerts.filter((a) => !a.is_read).length;
 
-    const markPriceUpdate = useCallback(() => {
-        lastPriceUpdateRef.current = Date.now();
-    }, []);
-
-    const applyPriceSnapshot = useCallback((nextPrices) => {
-        const signature = getPriceSnapshotSignature(nextPrices);
-        if (!signature) return false;
-
-        setLivePrices(nextPrices);
-        if (signature !== priceSnapshotSignatureRef.current) {
-            priceSnapshotSignatureRef.current = signature;
-            markPriceUpdate();
-            return true;
-        }
-        return false;
-    }, [markPriceUpdate]);
-
-    // ── Live Price WebSocket Connection ──────────────────
-    useEffect(() => {
-        // Check MD service status
-        marketApi.status().then(setMdStatus).catch(() => { });
-
-        const ws = new WebSocket(marketApi.wsUrl());
-        eventSourceRef.current = ws;
-
-        ws.onopen = () => {
-            setSseConnected(true);
-        };
-
-        ws.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                if (data.type === "snapshot" && data.prices) {
-                    applyPriceSnapshot(data.prices);
-                    return;
-                }
-                const tick = data.type === "price_update"
-                    ? { ...(data.data || {}), symbol: data.symbol }
-                    : data.tick || data;
-                if (tick.symbol) {
-                    setLivePrices((prev) => {
-                        const next = {
-                            ...prev,
-                            [tick.symbol]: { ...(prev[tick.symbol] || {}), ...tick },
-                        };
-                        priceSnapshotSignatureRef.current = getPriceSnapshotSignature(next);
-                        return next;
-                    });
-                    markPriceUpdate();
-                }
-            } catch { }
-        };
-
-        ws.onerror = () => {
-            setSseConnected(false);
-        };
-        ws.onclose = () => {
-            setSseConnected(false);
-        };
-
-        // Refresh MD status every 30s
-        const statusInterval = setInterval(() => {
-            marketApi.status().then(setMdStatus).catch(() => { });
-        }, 30000);
-
-        return () => {
-            ws.close();
-            clearInterval(statusInterval);
-        };
-    }, [applyPriceSnapshot]);
-
     // ── Instrument Cards Component ──────────────────────
     const FALLBACK_INSTRUMENTS = ['ESM6', 'GCM6', 'MESM6', 'MGCM6', 'MNQM6', 'NQM6'];
-
-    // Fallback: if SSE is disconnected or stale, poll prices via the Redis-backed REST API.
-    const fallbackSymbolsRef = useRef(FALLBACK_INSTRUMENTS);
-    useEffect(() => {
-        const fallback = setInterval(async () => {
-            const streamIsFresh = sseConnected && lastPriceUpdateRef.current && Date.now() - lastPriceUpdateRef.current < STREAM_STALE_MS;
-            if (streamIsFresh) return;
-
-            try {
-                const data = await marketApi.prices();
-                if (data.prices && Object.keys(data.prices).length > 0) {
-                    applyPriceSnapshot(data.prices);
-                    return; // Redis pipeline is working
-                }
-            } catch { }
-
-            // Redis snapshot returned nothing; try Redis quote lookup per symbol.
-            const symbols = fallbackSymbolsRef.current;
-            for (const sym of symbols) {
-                try {
-                    const quote = await marketApi.liveQuote(sym);
-                    if (getDisplayPrice(quote, sym) != null) {
-                        const symbol = quote.symbol || sym;
-                        setLivePrices(prev => ({
-                            ...prev,
-                            [symbol]: { ...(prev[symbol] || {}), ...quote },
-                        }));
-                        markPriceUpdate();
-                    }
-                } catch { }
-            }
-        }, REDIS_FALLBACK_POLL_MS);
-        return () => clearInterval(fallback);
-    }, [applyPriceSnapshot, sseConnected, markPriceUpdate]);
 
     const InstrumentCards = () => {
         const mdSymbols = mdStatus?.symbols || [];
